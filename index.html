@@ -222,6 +222,11 @@ function dbPatch(p,o){ return req(p,"PATCH",stamp(o)); }
 function dbPost(p,o){ return req(p,"POST",stamp(o)); }
 function dbDel(p){ return req(p,"DELETE"); }
 
+/* ================= تشخيص التثبيت ================= */
+var INSTALL_EVT=null, SW_STATE="لم يُسجَّل بعد", BIP=false;
+window.addEventListener("beforeinstallprompt",function(e){ e.preventDefault(); INSTALL_EVT=e; BIP=true; });
+window.addEventListener("appinstalled",function(){ INSTALL_EVT=null; BIP=true; SW_STATE="تم التثبيت"; });
+
 /* ================= أدوات ================= */
 function el(tag,attrs,kids){
   var e=document.createElement(tag); attrs=attrs||{};
@@ -388,6 +393,7 @@ function navItems(){
   });
   out.push({id:"__admin", icon:"⚙", title:"إدارة التطبيق", sep:true});
   out.push({id:"__hist",  icon:"⏱", title:"سجل التغييرات"});
+  out.push({id:"__diag",  icon:"⇩", title:"تشخيص التثبيت"});
   return out;
 }
 function buildNav(){
@@ -423,6 +429,7 @@ function select(id){
   var eb=document.getElementById("tb-eyebrow"), ti=document.getElementById("tb-title");
   if(id==="__admin"){ eb.textContent="بناء التطبيق من داخله"; ti.textContent="إدارة التطبيق"; renderAdmin(); return; }
   if(id==="__hist"){ eb.textContent="التأريخ والتراجع"; ti.textContent="سجل التغييرات"; renderHistory(); return; }
+  if(id==="__diag"){ eb.textContent="فحص شروط PWA"; ti.textContent="تشخيص التثبيت"; renderDiag(); return; }
   var t=findTab(id);
   if(!t){ var first=toArr(SCHEMA.tabs)[0]; if(first) return select(first.id); return select("__admin"); }
   eb.textContent=t.eyebrow||"قسم"; ti.textContent=t.title;
@@ -762,6 +769,76 @@ function renderHistory(){
   }).catch(function(e){ ap.appendChild(el("div",{"class":"empty"},["تعذّر تحميل السجل: "+e.message])); });
 }
 
+/* ================= شاشة تشخيص التثبيت ================= */
+function diagRow(state,title,detail){
+  var cls = state==="ok" ? "green" : (state==="bad" ? "danger" : "sand");
+  var lbl = state==="ok" ? "سليم"  : (state==="bad" ? "مشكلة"  : "للعلم");
+  return el("div",{"class":"adm-row"},[
+    el("span",{"class":"pill "+cls},[lbl]),
+    el("span",{"class":"t"},[title]),
+    el("span",{"class":"m",style:"word-break:break-all;max-width:100%"},[detail]),
+    el("span",{"class":"sp"})
+  ]);
+}
+function renderDiag(){
+  var c=document.getElementById("content"); c.innerHTML="";
+  var p=el("div",{"class":"panel"},[
+    el("span",{"class":"eyebrow"},["تشخيص"]),
+    el("h2",{},["ليه زر التثبيت مش ظاهر؟"]),
+    el("div",{"class":"hint"},["كل سطر أحمر هو السبب. صوّر الشاشة دى كاملة وابعتها لو فضلت المشكلة."])
+  ]);
+  c.appendChild(p);
+
+  var secure = (location.protocol==="https:") || (location.hostname==="localhost");
+  p.appendChild(diagRow(secure?"ok":"bad","١ · اتصال آمن HTTPS", location.protocol+"//"+location.hostname));
+  var onPages = location.hostname.indexOf("github.io")>=0;
+  p.appendChild(diagRow(onPages?"ok":"bad","٢ · مفتوح من GitHub Pages", location.href));
+
+  fetch("manifest.json").then(function(r){
+    if(!r.ok) throw new Error("HTTP "+r.status+" — الملف غير مرفوع؟");
+    return r.json();
+  }).then(function(m){
+    var icons=m.icons||[];
+    p.appendChild(diagRow("ok","٣ · المانيفست", "تم تحميله · "+icons.length+" أيقونة · display="+(m.display||"—")));
+    var need192=false;
+    icons.forEach(function(ic){ if(String(ic.sizes).indexOf("192")>=0) need192=true; });
+    p.appendChild(diagRow(need192?"ok":"bad","٤ · أيقونة 192×192", need192?"معرّفة":"ناقصة — كروم يرفض التثبيت بدونها"));
+    icons.forEach(function(ic){
+      fetch(ic.src).then(function(r){
+        p.appendChild(diagRow(r.ok?"ok":"bad","٥ · ملف الأيقونة "+ic.sizes, r.ok?"موجود على الخادم":("HTTP "+r.status+" — غير مرفوع")));
+      }).catch(function(e){
+        p.appendChild(diagRow("bad","٥ · ملف الأيقونة "+ic.sizes, e.message));
+      });
+    });
+  }).catch(function(e){
+    p.appendChild(diagRow("bad","٣ · المانيفست", e.message));
+  });
+
+  fetch("sw.js").then(function(r){
+    p.appendChild(diagRow(r.ok?"ok":"bad","٦ · ملف sw.js على الخادم", r.ok?"موجود":("HTTP "+r.status+" — غير مرفوع")));
+  }).catch(function(e){ p.appendChild(diagRow("bad","٦ · ملف sw.js", e.message)); });
+
+  p.appendChild(diagRow(SW_STATE.indexOf("مسجّل")>=0?"ok":"bad","٧ · تسجيل عامل الخدمة", SW_STATE));
+
+  var stand = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+  p.appendChild(diagRow(stand?"ok":"wait","٨ · وضع التشغيل الحالى", stand?"شغّال كتطبيق مثبّت بالفعل":"شغّال جوّه المتصفح"));
+  p.appendChild(diagRow(BIP?"ok":"wait","٩ · حدث التثبيت", BIP?"اتلقط — اضغط الزر تحت":"لم يُطلق: إمّا مثبّت بالفعل، أو المتصفح لا يدعمه (سفارى/فايرفوكس)، أو شرط ناقص فوق"));
+
+  var ua=navigator.userAgent;
+  var isIOS = /iPhone|iPad|iPod/.test(ua);
+  p.appendChild(diagRow("wait","١٠ · المتصفح", ua.slice(0,140)));
+  if(isIOS) p.appendChild(diagRow("wait","خاص بالآيفون","مفيش زر تثبيت — استخدم: مشاركة ← إضافة إلى الشاشة الرئيسية"));
+
+  var ib=el("button",{"class":"btn solid"},["ثبّت الآن"]);
+  ib.onclick=function(){
+    if(!INSTALL_EVT){ toast("الحدث لسه ماتلقطش — استنى ٥ ثوانٍ وافتح التبويب تانى",true); return; }
+    INSTALL_EVT.prompt();
+  };
+  var rb=el("button",{"class":"btn"},["إعادة الفحص"]);
+  rb.onclick=function(){ renderDiag(); };
+  p.appendChild(el("div",{"class":"actions"},[ib,rb]));
+}
+
 /* ================= الإقلاع ================= */
 function boot(){
   dbGet(ROOT+"/data/schema").then(function(s){
@@ -791,10 +868,14 @@ boot();
 
 if("serviceWorker" in navigator){
   window.addEventListener("load",function(){
-    navigator.serviceWorker.register("sw.js").catch(function(){});
+    navigator.serviceWorker.register("sw.js").then(function(reg){
+      SW_STATE="مسجّل — نطاق "+reg.scope;
+    }).catch(function(err){
+      SW_STATE="فشل التسجيل: "+err.message;
+    });
   });
-}
+}else{ SW_STATE="المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 1.01 -->
+<!-- build 1.02 -->
 </body>
 </html>
