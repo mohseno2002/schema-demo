@@ -1,0 +1,11 @@
+{
+  "name": "محرّك المخطط — نموذج التطبيق القابل للتوسّع",
+  "short_name": "محرّك المخطط",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#faf8f2",
+  "theme_color": "#155b75",
+  "icons": []
+}
