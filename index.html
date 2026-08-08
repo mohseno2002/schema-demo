@@ -369,8 +369,9 @@ function publish(action,after){
       toast("المخطط اتعدّل من مستخدم تانى — اضغط تحديث الأول",true);
       throw new Error("تعارض إصدارات");
     }
-    var snap={version:(old.version||0), at:old.at||0, by:old.by||"", action:old.action||"", schema:old};
-    return dbPut(ROOT+"/data/history/v"+(old.version||0), snap);
+    if(!live) return null;
+    var snap={version:(live.version||0), at:live.at||0, by:live.by||"", action:live.action||"", schema:live};
+    return dbPut(ROOT+"/data/history/v"+(live.version||0), snap);
   }).then(function(){
     var next=JSON.parse(JSON.stringify(old));
     next.version=(old.version||0)+1;
@@ -876,6 +877,6 @@ if("serviceWorker" in navigator){
   });
 }else{ SW_STATE="المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 1.02 -->
+<!-- build 1.03 -->
 </body>
 </html>

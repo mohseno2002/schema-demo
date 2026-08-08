@@ -1,4 +1,4 @@
-var VERSION = "schema-demo-v1.02";
+var VERSION = "schema-demo-v1.03";
 var SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", function (e) {
