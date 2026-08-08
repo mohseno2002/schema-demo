@@ -1177,6 +1177,189 @@ var SchemaEngine = (function () {
     return typeof m.c === "number" ? m.c : parseFloat(m.c);
   }
 
+
+  /* ---------------- قوالب تبويبات جاهزة لأعمال المجارى المائية ---------------- */
+  /* كل قالب بنية فقط — بلا سجلات ولا أرقام مفترضة.
+     يُركَّب على أى مخطط قائم من شاشة الإدارة وينشر إصداراً قابلاً للتراجع. */
+  function fPct(id, label) {
+    return { id: id, label: label, type: "number", unit: "%", required: true, min: 0, max: 100 };
+  }
+  function fCanal() { return { id: "canal", label: "الترعة / المجرى", type: "text", required: true }; }
+  function fKm(id, label) { return { id: id, label: label, type: "number", unit: "ك.م", min: 0, max: 2000 }; }
+  function fLen(unit, max) {
+    return { id: "len", label: "الطول المنفّذ", type: "number", unit: unit || "م", required: true, min: 0, max: max || 100000 };
+  }
+  function fContractor() { return { id: "contractor", label: "المقاول / جهة التنفيذ", type: "text" }; }
+  function fDates() {
+    return [
+      { id: "start", label: "تاريخ البدء", type: "date" },
+      { id: "due", label: "تاريخ الانتهاء المخطط", type: "date" }
+    ];
+  }
+  function fStatus() {
+    return { id: "status", label: "الموقف", type: "select", options: "لم يبدأ,جارٍ التنفيذ,متوقف,منتهٍ,تحت الاستلام", required: true };
+  }
+  function fGeo() {
+    return [
+      { id: "lat", label: "خط العرض", type: "number" },
+      { id: "lng", label: "خط الطول", type: "number" }
+    ];
+  }
+  function wTable(label) { return { id: uid("w"), type: "table", label: label || "السجلات" }; }
+  function wMap(label) {
+    return { id: uid("w"), type: "map", label: label || "مواقع الأعمال", latField: "lat", lngField: "lng", labelField: "canal", base: "esri" };
+  }
+  function wProgress() {
+    return { id: uid("w"), type: "kpi", label: "متوسط نسبة التنفيذ", agg: "avg", field: "pct", unit: "%", icon: "◔", style: "sand" };
+  }
+  function wCount(label) {
+    return { id: uid("w"), type: "kpi", label: label, agg: "count", field: "", unit: "بند", icon: "#", style: "green" };
+  }
+  function wSumLen(unit) {
+    return { id: uid("w"), type: "kpi", label: "إجمالى الأطوال", agg: "sum", field: "len", unit: unit || "م", icon: "\u03A3" };
+  }
+  function wChartBy(field, label) {
+    return { id: uid("w"), type: "chart", label: label, labelField: field, valueField: "len", agg: "sum", chartType: "bar" };
+  }
+
+  var TEMPLATES = [
+    {
+      id: "works", name: "سجل الأعمال الجارية (كل الأنواع)",
+      desc: "سجل واحد لكل أعمال المجارى: تبطين · تكسية دبش · تغطية خرسانية · مواسير · كبارى · تطهير — مع نوع العمل كحقل تصنيف",
+      build: function () {
+        return {
+          id: uid("tab"), icon: "\u2692", eyebrow: "متابعة تنفيذ", title: "الأعمال الجارية",
+          source: { type: "firebase" },
+          fields: [
+            fCanal(),
+            { id: "wtype", label: "نوع العمل", type: "select", required: true,
+              options: "تبطين خرسانى,تكسية دبش,تغطية خرسانية,مواسير,كوبرى,تطهير,إحلال وتجديد,حماية جسور" },
+            fKm("kmFrom", "من كيلو"), fKm("kmTo", "إلى كيلو"),
+            fLen("م"),
+            fPct("pct", "نسبة التنفيذ"),
+            fStatus(), fContractor()
+          ].concat(fDates()).concat([
+            { id: "cost", label: "التكلفة التقديرية", type: "number", unit: "أ.ج", min: 0 }
+          ]).concat(fGeo()),
+          widgets: [
+            wCount("عدد بنود الأعمال"), wSumLen("م"), wProgress(),
+            { id: uid("w"), type: "kpi", label: "إجمالى التكلفة التقديرية", agg: "sum", field: "cost", unit: "أ.ج", icon: "\u00A4" },
+            wChartBy("wtype", "الأطوال حسب نوع العمل"),
+            wChartBy("canal", "الأطوال حسب المجرى"),
+            wMap("مواقع الأعمال على المجارى"),
+            wTable("بنود الأعمال")
+          ]
+        };
+      }
+    },
+    {
+      id: "lining", name: "تبطين وتكسية دبش",
+      desc: "التبطين الخرسانى وتكسية الدبش بالقطاعات: من/إلى كيلو · نوع التبطين · السُمك · الطول · نسبة التنفيذ",
+      build: function () {
+        return {
+          id: uid("tab"), icon: "\u25A6", eyebrow: "أعمال تبطين", title: "التبطين والتكسية",
+          source: { type: "firebase" },
+          fields: [
+            fCanal(),
+            { id: "ltype", label: "نوع التبطين", type: "select", required: true,
+              options: "خرسانة مسلحة,خرسانة عادية,تكسية دبش,بلاطات مسبقة الصب,جيوتكستايل" },
+            fKm("kmFrom", "من كيلو"), fKm("kmTo", "إلى كيلو"),
+            fLen("م"),
+            { id: "thk", label: "السُمك", type: "number", unit: "سم", min: 1, max: 100 },
+            { id: "side", label: "الموضع", type: "select", options: "الجانبان,اليمين,اليسار,القاع والجانبان" },
+            fPct("pct", "نسبة التنفيذ"), fStatus(), fContractor()
+          ].concat(fDates()).concat(fGeo()),
+          widgets: [
+            wSumLen("م"), wCount("عدد القطاعات"), wProgress(),
+            wChartBy("ltype", "الأطوال حسب نوع التبطين"),
+            wChartBy("canal", "الأطوال حسب المجرى"),
+            wMap("مواقع قطاعات التبطين"), wTable("قطاعات التبطين")
+          ]
+        };
+      }
+    },
+    {
+      id: "bridges", name: "الكبارى والمنشآت",
+      desc: "إنشاء أو إحلال أو صيانة الكبارى والبدالات: نوع المنشأ · البحور · العرض · الموقف · نسبة التنفيذ",
+      build: function () {
+        return {
+          id: uid("tab"), icon: "\u2354", eyebrow: "منشآت", title: "الكبارى والمنشآت",
+          source: { type: "firebase" },
+          fields: [
+            fCanal(),
+            { id: "name", label: "اسم المنشأ", type: "text", required: true },
+            { id: "km", label: "الكيلومتر", type: "number", unit: "ك.م", min: 0, max: 2000 },
+            { id: "stype", label: "نوع المنشأ", type: "select", required: true,
+              options: "كوبرى خرسانى,كوبرى معدنى,بدال,هدار,سيفون,عبارة صندوقية,عبارة ماسورة" },
+            { id: "work", label: "نوع العمل", type: "select", required: true, options: "إنشاء جديد,إحلال,تدعيم,صيانة,توسعة" },
+            { id: "spans", label: "عدد البحور", type: "number", min: 1, max: 50 },
+            { id: "width", label: "عرض الكوبرى", type: "number", unit: "م", min: 1, max: 100 },
+            fPct("pct", "نسبة التنفيذ"), fStatus(), fContractor()
+          ].concat(fDates()).concat([
+            { id: "cost", label: "التكلفة التقديرية", type: "number", unit: "أ.ج", min: 0 }
+          ]).concat(fGeo()),
+          widgets: [
+            wCount("عدد المنشآت"), wProgress(),
+            { id: uid("w"), type: "kpi", label: "إجمالى التكلفة", agg: "sum", field: "cost", unit: "أ.ج", icon: "\u00A4" },
+            { id: uid("w"), type: "chart", label: "المنشآت حسب النوع", labelField: "stype", valueField: "pct", agg: "count", chartType: "bar" },
+            wMap("مواقع المنشآت"), wTable("سجل المنشآت")
+          ]
+        };
+      }
+    },
+    {
+      id: "covers", name: "التغطيات والمواسير",
+      desc: "تغطية المجارى بالخرسانة أو تحويلها لمواسير: القطر · عدد الخطوط · الطول · الغرض",
+      build: function () {
+        return {
+          id: uid("tab"), icon: "\u25AD", eyebrow: "تغطيات", title: "التغطيات والمواسير",
+          source: { type: "firebase" },
+          fields: [
+            fCanal(),
+            { id: "ctype", label: "نوع العمل", type: "select", required: true,
+              options: "تغطية خرسانية,عبارة صندوقية,مواسير خرسانية,مواسير PVC/uPVC,مواسير GRP,مواسير حديد" },
+            fKm("kmFrom", "من كيلو"), fKm("kmTo", "إلى كيلو"),
+            fLen("م"),
+            { id: "dia", label: "القطر / عرض الفتحة", type: "number", unit: "مم", min: 50, max: 5000 },
+            { id: "lines", label: "عدد الخطوط", type: "number", min: 1, max: 20 },
+            { id: "purpose", label: "الغرض", type: "select", options: "عبور طريق,حماية من التلوث,توفير حرم,ربط شبكات,أخرى" },
+            fPct("pct", "نسبة التنفيذ"), fStatus(), fContractor()
+          ].concat(fDates()).concat(fGeo()),
+          widgets: [
+            wSumLen("م"), wCount("عدد البنود"), wProgress(),
+            wChartBy("ctype", "الأطوال حسب نوع التغطية"),
+            wMap("مواقع التغطيات"), wTable("بنود التغطية")
+          ]
+        };
+      }
+    },
+    {
+      id: "cleaning", name: "أعمال التطهير",
+      desc: "التطهير الميكانيكى واليدوى والعائم: القطاع · الكمية · الطول · التكلفة",
+      build: function () {
+        return {
+          id: uid("tab"), icon: "\u224B", eyebrow: "سجل ميدانى", title: "أعمال التطهير",
+          source: { type: "firebase" },
+          fields: [
+            fCanal(),
+            { id: "ctype", label: "نوع التطهير", type: "select", required: true, options: "ميكانيكى,يدوى,عائم,مختلط" },
+            fKm("kmFrom", "من كيلو"), fKm("kmTo", "إلى كيلو"),
+            fLen("م"),
+            { id: "qty", label: "الكمية المنزوعة", type: "number", unit: "م³", min: 0 },
+            fPct("pct", "نسبة التنفيذ"), fStatus(), fContractor()
+          ].concat(fDates()).concat(fGeo()),
+          widgets: [
+            wSumLen("م"),
+            { id: uid("w"), type: "kpi", label: "إجمالى الكميات", agg: "sum", field: "qty", unit: "م³", icon: "\u2211", style: "green" },
+            wProgress(),
+            wChartBy("canal", "الأطوال المطهّرة حسب المجرى"),
+            wMap("مواقع أعمال التطهير"), wTable("بنود التطهير")
+          ]
+        };
+      }
+    }
+  ];
+
   /* ---------------- كتالوج العناصر ---------------- */
   var WIDGETS = {
     kpi: { name: "رقم مجمّع", needs: ["agg", "field"] },
@@ -1240,7 +1423,8 @@ var SchemaEngine = (function () {
     BASEMAPS: BASEMAPS, gibsLayer: gibsLayer, ensureLeaflet: ensureLeaflet,
     buildKML: buildKML, downloadText: downloadText, earthUrl: earthUrl,
     WIDGETS: WIDGETS, publish: publish,
-    HYDRO: HYDRO, hydroValue: hydroValue, hydroBalance: hydroBalance
+    HYDRO: HYDRO, hydroValue: hydroValue, hydroBalance: hydroBalance,
+    TEMPLATES: TEMPLATES
   };
 })();
 
@@ -2185,6 +2369,28 @@ function renderAdmin() {
   tools.appendChild(el("div", { "class": "actions" }, [dashBtn, expBtn, impBtn, impInput]));
   c.appendChild(tools);
 
+  /* قوالب جاهزة — تُركَّب على المخطط القائم */
+  var tplPanel = panel("قوالب جاهزة", "تبويبات أعمال المجارى المائية");
+  tplPanel.appendChild(el("div", { "class": "hint" }, [
+    "كل قالب بنية جاهزة بحقولها وحدود تحققها ومؤشراتها ورسومها وخريطتها — بلا أى بيانات. يُضاف كتبويب جديد وينشر إصداراً قابلاً للتراجع، ثم عدّله كما تشاء."
+  ]));
+  E.toArr(E.TEMPLATES).forEach(function (tpl) {
+    var b = el("button", { "class": "btn mini solid" }, ["تركيب"]);
+    b.onclick = function () {
+      var t = tpl.build();
+      S.schema.tabs = toArr(S.schema.tabs).concat([t]);
+      ADM_TAB = t.id;
+      pub("تركيب قالب: " + tpl.name);
+    };
+    tplPanel.appendChild(el("div", { "class": "adm-row" }, [
+      el("span", { "class": "pill lake" }, ["قالب"]),
+      el("span", { "class": "t" }, [tpl.name]),
+      el("span", { "class": "m", style: "max-width:100%" }, [tpl.desc]),
+      el("span", { "class": "sp" }), b
+    ]));
+  });
+  c.appendChild(tplPanel);
+
   var tp = panel("البنية", "التبويبات الحالية");
   toArr(S.schema.tabs).forEach(function (t) {
     var open = el("button", { "class": "btn mini" }, [ADM_TAB === t.id ? "إغلاق" : "فتح البناء"]);
@@ -2700,44 +2906,10 @@ APP.title = "محرّك المخطط — نموذج التطبيق القابل 
 var SEED = {
   version: 1, at: Date.now(), by: "تهيئة", action: "إنشاء المخطط الأول",
   tabs: [{
-    id: "tab-dash", icon: "\u25F1", eyebrow: "نظرة المدير", title: "لوحة القيادة",
-    source: { type: "firebase" }, fields: [],
-    widgets: [
-      { id: "d-x1", type: "xkpi", label: "إجمالى الأطوال المنفّذة", tabId: "tab-clean", agg: "sum", field: "len", unit: "م", icon: "\u03A3" },
-      { id: "d-x2", type: "xkpi", label: "عدد بلاغات التطهير", tabId: "tab-clean", agg: "count", field: "", unit: "سجل", style: "green", icon: "#" },
-      { id: "d-x3", type: "xkpi", label: "عدد القطاعات المرصودة", tabId: "tab-hyd", agg: "count", field: "", unit: "قطاع", style: "sand", icon: "\u0192" },
-      { id: "d-ov", type: "overview", label: "حالة كل التبويبات" },
-      { id: "d-ch", type: "xchart", label: "الأطوال المنفّذة حسب الترعة", tabId: "tab-clean", labelField: "canal", valueField: "len", agg: "sum", chartType: "bar" },
-      { id: "d-ac", type: "activity", label: "آخر الحركات على التطبيق", limit: 8 }
-    ]
-  }, {
-    id: "tab-clean", icon: "\u224B", eyebrow: "سجل ميدانى", title: "متابعة التطهير",
+    id: "tab-1", icon: "▣", eyebrow: "قسم", title: "التبويب الأول",
     source: { type: "firebase" },
-    fields: [
-      { id: "canal", label: "الترعة", type: "text", required: true },
-      { id: "len", label: "الطول المنفّذ", type: "number", unit: "م", required: true, min: 0, max: 100000 },
-      { id: "day", label: "التاريخ", type: "date" }
-    ],
-    widgets: [
-      { id: "w-sum", type: "kpi", label: "إجمالى الأطوال المنفّذة", agg: "sum", field: "len", unit: "م", icon: "\u03A3" },
-      { id: "w-cnt", type: "kpi", label: "عدد السجلات", agg: "count", field: "", unit: "سجل", style: "green", icon: "#" },
-      { id: "w-ch", type: "chart", label: "الأطوال حسب الترعة", labelField: "canal", valueField: "len", agg: "sum", chartType: "bar" },
-      { id: "w-tbl", type: "table", label: "السجلات المدخلة" }
-    ]
-  }, {
-    id: "tab-hyd", icon: "\u0192", eyebrow: "هيدروليكا", title: "قطاعات المجرى",
-    source: { type: "firebase" },
-    fields: [
-      { id: "sec", label: "القطاع", type: "text", required: true },
-      { id: "b", label: "عرض القاع", type: "number", unit: "م", required: true, min: 0.1, max: 500 },
-      { id: "y", label: "عمق الماء", type: "number", unit: "م", required: true, min: 0.01, max: 20 },
-      { id: "n", label: "معامل الخشونة", type: "number", required: true, min: 0.012, max: 0.075 }
-    ],
-    widgets: [
-      { id: "w-hyd", type: "hydro", label: "مانينج — تصرف وسرعة ورقابة", calc: "manning", labelField: "sec",
-        map: { b: { f: "b" }, y: { f: "y" }, z: { c: 2 }, n: { f: "n" }, S: { c: 0.0001 } } },
-      { id: "w-hyd-tbl", type: "table", label: "بيانات القطاعات" }
-    ]
+    fields: [],
+    widgets: []
   }]
 };
 
@@ -2754,6 +2926,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 4.20 -->
+<!-- build 4.30 -->
 </body>
 </html>
