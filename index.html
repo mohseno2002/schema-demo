@@ -144,6 +144,7 @@ h1,h2,h3{letter-spacing:-.3px}
   .rep-tbl tr{page-break-inside:avoid}
 }
 .btn.off{opacity:.45;border-style:dashed}
+tr.row-alert td{background:#fdf6f4}
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 6px}
 .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 13px;font-size:10.5px;
   font-weight:700;color:#4c5854;transition:.15s}
@@ -969,6 +970,27 @@ var SchemaEngine = (function () {
     });
   }
 
+  /* أى حقول فى تبويب تربطه بالكيان المختار:
+     أولاً حقول المرجع الصريحة، ثم الحقول النصية المسمّاة بنفس مفتاح المطابقة
+     (للتبويبات القديمة التى تسبق حقل المرجع). */
+  function entityFields(tab, entityTabId, matchField) {
+    var out = [];
+    toArr(tab.fields).forEach(function (f) {
+      if (f.type === "ref" && f.refTab === entityTabId) out.push(f.id);
+      else if (matchField && f.id === matchField && (f.type === "text" || f.type === "select")) out.push(f.id);
+    });
+    return out;
+  }
+  function entityRows(tab, rows, entityTabId, matchField, value) {
+    var keys = entityFields(tab, entityTabId, matchField);
+    if (!keys.length) return null;          /* التبويب غير مرتبط بالكيان أصلاً */
+    return rows.filter(function (r) {
+      var hit = false;
+      keys.forEach(function (k) { if (String(r[k]) === String(value)) hit = true; });
+      return hit;
+    });
+  }
+
   /* تحميل سجلات كل التبويبات معاً — أساس لوحة القيادة العابرة للتبويبات.
      فشل تبويب واحد لا يُسقط اللوحة: يُعلَّم offline ويُكمَّل الباقى */
   function loadAllRecords(schema) {
@@ -1272,13 +1294,17 @@ var SchemaEngine = (function () {
               options: "تبطين خرسانى,تكسية دبش,تغطية خرسانية,مواسير,كوبرى,تطهير,إحلال وتجديد,حماية جسور" },
             fKm("kmFrom", "من كيلو"), fKm("kmTo", "إلى كيلو"),
             fLen("م"),
+            { id: "planned", label: "الكمية المخططة", type: "number", unit: "م", min: 0 },
             fPct("pct", "نسبة التنفيذ"),
             fStatus(), fContractor()
           ].concat(fDates()).concat([
-            { id: "cost", label: "التكلفة التقديرية", type: "number", unit: "أ.ج", min: 0 }
+            { id: "cost", label: "التكلفة التقديرية", type: "number", unit: "أ.ج", min: 0 },
+            { id: "note", label: "ملاحظات", type: "text" }
           ]).concat(fGeo()),
           widgets: [
             wCount("عدد بنود الأعمال"), wSumLen("م"), wProgress(),
+            { id: uid("w"), type: "kpi", label: "إجمالى المخطط", agg: "sum", field: "planned", unit: "م", icon: "\u25CB", style: "sand" },
+            { id: uid("w"), type: "formula", label: "المنفَّذ من المخطط", expr: "sum(len)/sum(planned)*100", unit: "%", icon: "%" },
             { id: uid("w"), type: "kpi", label: "إجمالى التكلفة التقديرية", agg: "sum", field: "cost", unit: "أ.ج", icon: "\u00A4" },
             wChartBy("wtype", "الأطوال حسب نوع العمل"),
             wChartBy("canal", "الأطوال حسب المجرى"),
@@ -1442,6 +1468,34 @@ var SchemaEngine = (function () {
             wChart("eng", "lenKm", "الأطوال حسب الهندسة"),
             wChart("cstate", "lenKm", "الأطوال حسب حالة المجرى"),
             wMap("مواقع المجارى", "name"), wTable("سجل المجارى")
+          ]
+        };
+      }
+    },
+    {
+      id: "canal-page", group: "رى وتشغيل", name: "صفحة المجرى الواحد",
+      desc: "تختار مجرى فتُجمع له كل سجلاته من كل التبويبات: أعماله وشكاواه وتعدياته وقياساته ومنشآته — بلا إدخال جديد",
+      /* يحتاج تبويباً مرجعياً موجوداً: يبحث عنه فى المخطط الحالى بدل افتراض معرّف ثابت */
+      build: function (ctx) {
+        var tabs = toArr(ctx && ctx.tabs), pick = null;
+        tabs.forEach(function (t) {
+          if (pick) return;
+          var hasName = false;
+          toArr(t.fields).forEach(function (f) { if (f.id === "name" && f.type === "text") hasName = true; });
+          if (hasName && (String(t.title).indexOf("المجار") >= 0 || String(t.eyebrow) === "مرجع")) pick = t;
+        });
+        if (!pick) {
+          tabs.forEach(function (t) {
+            if (pick) return;
+            toArr(t.fields).forEach(function (f) { if (!pick && f.id === "name" && f.type === "text") pick = t; });
+          });
+        }
+        if (!pick) return { error: "ركّب قالب «سجل المجارى» أولاً — صفحة المجرى تعتمد عليه كمصدر." };
+        return {
+          id: uid("tab"), icon: "\u25C9", eyebrow: "ملف مجرى", title: "صفحة المجرى",
+          source: { type: "firebase" }, fields: [],
+          widgets: [
+            { id: uid("w"), type: "entity", label: "ملف المجرى", entityTab: pick.id, entityField: "name", matchField: "canal" }
           ]
         };
       }
@@ -2207,6 +2261,233 @@ var SchemaEngine = (function () {
     }
   };
 
+
+  /* ---------------- لقطة المؤشرات اليومية (خط اتجاه بلا خادم) ----------------
+     تُكتب لقطة واحدة يومياً عند أول فتح للتطبيق: أول جهاز يفتح يكتبها والباقى يجدها.
+     لا مهام مجدولة ولا خادم — الثمن نداءُ قراءة واحد يومياً لكل جهاز. */
+  function dayKey(d) {
+    d = d || new Date();
+    function p(x) { return (x < 10 ? "0" : "") + x; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+  function metricId(tabId, widgetId) { return tabId + "|" + widgetId; }
+  function snapshotItems(schema, allMap) {
+    var items = [];
+    toArr(schema && schema.tabs).forEach(function (t) {
+      var e = allMap[t.id];
+      if (!e) return;
+      items.push({
+        mid: metricId(t.id, "__count"), tab: t.title,
+        label: "عدد سجلات " + t.title, unit: "سجل", value: e.rows.length
+      });
+      toArr(t.widgets).forEach(function (w) {
+        if (w.type === "kpi") {
+          try {
+            items.push({ mid: metricId(t.id, w.id), tab: t.title, label: w.label, unit: w.unit || "",
+              value: aggregate(w.agg || "count", w.field || "", e.rows) });
+          } catch (err) { /* مؤشر معطوب لا يُسقط اللقطة */ }
+        } else if (w.type === "formula") {
+          try {
+            var v = evalExpr(w.expr, e.rows);
+            if (isFinite(v)) items.push({ mid: metricId(t.id, w.id), tab: t.title, label: w.label, unit: w.unit || "", value: v });
+          } catch (err) { }
+        }
+      });
+    });
+    return items;
+  }
+  function takeSnapshot(schema, by) {
+    return loadAllRecords(schema).then(function (m) {
+      var items = snapshotItems(schema, m);
+      return db.put(CFG.root + "/data/trend/" + dayKey(), {
+        at: Date.now(), by: by || "تلقائى", version: schema.version || 0, items: items
+      }).then(function () { return items.length; });
+    });
+  }
+  /* تُستدعى عند الإقلاع: تكتب فقط إن لم توجد لقطة اليوم */
+  function ensureSnapshot(schema, by) {
+    return db.get(CFG.root + "/data/trend/" + dayKey()).then(function (t) {
+      if (t && t.items) return 0;
+      return takeSnapshot(schema, by);
+    });
+  }
+  function loadTrend() {
+    return db.get(CFG.root + "/data/trend").then(function (o) {
+      var out = [];
+      Object.keys(o || {}).forEach(function (k) {
+        var v = o[k];
+        if (v && v.items) out.push({ day: k, at: v.at, items: toArr(v.items) });
+      });
+      out.sort(function (a, b) { return a.day < b.day ? -1 : (a.day > b.day ? 1 : 0); });
+      return out;
+    });
+  }
+  function trendSeries(snaps, mid) {
+    var out = [];
+    snaps.forEach(function (sn) {
+      var hit = null;
+      sn.items.forEach(function (it) { if (!hit && it.mid === mid) hit = it; });
+      if (hit && isFinite(hit.value)) out.push({ label: sn.day.slice(5), value: hit.value, day: sn.day, unit: hit.unit, name: hit.label });
+    });
+    return out;
+  }
+
+
+  /* ---------------- قواعد الإنذار (تقييم صفّ بصفّ، بلا eval) ----------------
+     محلّل مستقل عن evalExpr: هذا يعمل على قيم السجل الواحد ويعيد صواب/خطأ،
+     وذاك يعمل على مجموعة السجلات ويعيد رقماً. لم يُدمجا حتى لا تنكسر المعادلات القائمة. */
+  var RULE_FUNCS = { today: 1, empty: 1, filled: 1, days: 1 };
+  function tokenizeRule(src) {
+    var t = [], i = 0, W = /[A-Za-z0-9_\u0600-\u06FF]/;
+    var two = ["<=", ">=", "==", "!=", "<>", "&&", "||"];
+    while (i < src.length) {
+      var c = src.charAt(i);
+      if (c === " ") { i++; continue; }
+      var pair = src.substr(i, 2);
+      if (two.indexOf(pair) >= 0) { t.push({ k: "op", v: pair }); i += 2; continue; }
+      if ("<>=".indexOf(c) >= 0) { t.push({ k: "op", v: c }); i++; continue; }
+      if ("+-*/(),!".indexOf(c) >= 0) { t.push({ k: c }); i++; continue; }
+      if ((c >= "0" && c <= "9") || c === ".") {
+        var j = i;
+        while (j < src.length && ((src.charAt(j) >= "0" && src.charAt(j) <= "9") || src.charAt(j) === ".")) j++;
+        t.push({ k: "num", v: parseFloat(src.slice(i, j)) }); i = j; continue;
+      }
+      if (c === "\u0022" || c === "'") {
+        var q = c, m2 = i + 1, str = "";
+        while (m2 < src.length && src.charAt(m2) !== q) { str += src.charAt(m2); m2++; }
+        if (m2 >= src.length) throw new Error("نص غير مغلق");
+        t.push({ k: "str", v: str }); i = m2 + 1; continue;
+      }
+      if (W.test(c)) {
+        var m = i;
+        while (m < src.length && W.test(src.charAt(m))) m++;
+        t.push({ k: "id", v: src.slice(i, m) }); i = m; continue;
+      }
+      throw new Error("رمز غير مفهوم: " + c);
+    }
+    return t;
+  }
+  function dayNum(v) {
+    /* تاريخ نصى YYYY-MM-DD إلى عدد أيام — ليصحّ مقارنته بـtoday() */
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
+    if (!m) return null;
+    return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000);
+  }
+  function ruleIdents(src) {
+    var out = [], t;
+    try { t = tokenizeRule(src); } catch (e) { return out; }
+    for (var i = 0; i < t.length; i++) {
+      if (t[i].k !== "id") continue;
+      var isCall = t[i + 1] && t[i + 1].k === "(";
+      if (isCall) continue;
+      if (t[i].v === "and" || t[i].v === "or" || t[i].v === "not") continue;
+      if (out.indexOf(t[i].v) < 0) out.push(t[i].v);
+    }
+    return out;
+  }
+  function evalRule(src, row) {
+    var t = tokenizeRule(src), p = 0;
+    function peek() { return t[p]; }
+    function isOp(v) { var x = peek(); return x && x.k === "op" && x.v === v; }
+    function isWord(v) { var x = peek(); return x && x.k === "id" && x.v === v; }
+    function eat(k) { if (!t[p] || t[p].k !== k) throw new Error("متوقع " + k); return t[p++]; }
+    function fieldVal(name) {
+      var v = row ? row[name] : undefined;
+      if (v === undefined || v === null || v === "") return null;
+      var d = dayNum(v);
+      if (d !== null) return d;
+      var n = parseFloat(v);
+      if (!isNaN(n) && String(n) === String(v).trim()) return n;
+      return String(v);
+    }
+    function primary() {
+      var tk = peek();
+      if (!tk) throw new Error("تعبير ناقص");
+      if (tk.k === "num") { p++; return tk.v; }
+      if (tk.k === "str") { p++; return tk.v; }
+      if (tk.k === "(") { p++; var v = orExpr(); eat(")"); return v; }
+      if (tk.k === "-") { p++; var u = primary(); return typeof u === "number" ? -u : NaN; }
+      if (tk.k === "id") {
+        p++;
+        var name = tk.v;
+        if (peek() && peek().k === "(") {
+          p++;
+          var arg = null;
+          if (peek() && peek().k === "id") { arg = t[p].v; p++; }
+          eat(")");
+          if (!RULE_FUNCS[name]) throw new Error("دالة غير معروفة: " + name);
+          if (name === "today") return Math.floor(Date.now() / 86400000);
+          if (name === "empty") return fieldVal(arg) === null;
+          if (name === "filled") return fieldVal(arg) !== null;
+          if (name === "days") { var dv = fieldVal(arg); return dv === null ? null : dv; }
+        }
+        return fieldVal(name);
+      }
+      throw new Error("رمز غير متوقع");
+    }
+    function unary() {
+      if (peek() && (peek().k === "!" || isWord("not"))) { p++; return !truthy(unary()); }
+      return primary();
+    }
+    function mul() {
+      var v = unary();
+      while (peek() && (peek().k === "*" || peek().k === "/")) {
+        var op = t[p++].k, r = unary();
+        v = op === "*" ? v * r : (r === 0 ? NaN : v / r);
+      }
+      return v;
+    }
+    function add() {
+      var v = mul();
+      while (peek() && (peek().k === "+" || peek().k === "-")) {
+        var op = t[p++].k, r = mul();
+        v = op === "+" ? v + r : v - r;
+      }
+      return v;
+    }
+    function cmp() {
+      var a = add();
+      var x = peek();
+      if (!x || x.k !== "op" || x.v === "&&" || x.v === "||") return a;
+      var op = t[p++].v, b = add();
+      if (a === null || b === null) return false;      /* قيمة غائبة لا تُطلق إنذاراً */
+      if (op === "=" || op === "==") return a === b;
+      if (op === "!=" || op === "<>") return a !== b;
+      if (typeof a !== "number" || typeof b !== "number") return false;
+      if (op === "<") return a < b;
+      if (op === "<=") return a <= b;
+      if (op === ">") return a > b;
+      if (op === ">=") return a >= b;
+      throw new Error("مقارنة غير معروفة: " + op);
+    }
+    function truthy(v) { return v === true || (typeof v === "number" && v !== 0 && !isNaN(v)); }
+    function andExpr() {
+      var v = cmp();
+      while (peek() && ((peek().k === "op" && peek().v === "&&") || isWord("and"))) {
+        p++; var r = cmp(); v = truthy(v) && truthy(r);
+      }
+      return v;
+    }
+    function orExpr() {
+      var v = andExpr();
+      while (peek() && ((peek().k === "op" && peek().v === "||") || isWord("or"))) {
+        p++; var r = andExpr(); v = truthy(v) || truthy(r);
+      }
+      return v;
+    }
+    var out = orExpr();
+    if (p < t.length) throw new Error("زوائد بعد نهاية الشرط");
+    return truthy(out);
+  }
+  /* إنذارات صفّ واحد حسب قواعد تبويبه */
+  function rowAlerts(tab, row) {
+    var fired = [];
+    toArr(tab && tab.alerts).forEach(function (a) {
+      try { if (evalRule(a.expr, row)) fired.push(a); } catch (e) { /* قاعدة معطوبة لا تُسقط الصف */ }
+    });
+    return fired;
+  }
+
   /* ---------------- كتالوج العناصر ---------------- */
   var WIDGETS = {
     kpi: { name: "رقم مجمّع", needs: ["agg", "field"] },
@@ -2217,9 +2498,12 @@ var SchemaEngine = (function () {
     hydro: { name: "حساب هيدروليكى", needs: ["calc"] },
     design: { name: "تصميم منشأ", needs: ["dcalc"] },
     overview: { name: "نظرة عامة على كل التبويبات", needs: [] },
+    entity: { name: "صفحة كيان واحد (مجرى/منشأ)", needs: ["entityTab", "entityField"] },
     xkpi: { name: "رقم من تبويب آخر", needs: ["tabId", "agg"] },
     xchart: { name: "رسم من تبويب آخر", needs: ["tabId", "labelField", "valueField"] },
     activity: { name: "آخر الحركات", needs: [] },
+    trend: { name: "اتجاه مؤشر عبر الزمن", needs: ["mid"] },
+    alerts: { name: "قائمة الإنذارات (كل التبويبات)", needs: [] },
     note: { name: "ملاحظة نصية", needs: ["text"] }
   };
 
@@ -2270,7 +2554,10 @@ var SchemaEngine = (function () {
     el: el, toArr: toArr, uid: uid, fmt: fmt, when: when, esc: esc,
     evalExpr: evalExpr, aggregate: aggregate, tokenize: tokenize,
     parseCSV: parseCSV, sheetCsvUrl: sheetCsvUrl, loadSheet: loadSheet, loadRecords: loadRecords,
-    loadAllRecords: loadAllRecords,
+    loadAllRecords: loadAllRecords, entityFields: entityFields, entityRows: entityRows,
+    evalRule: evalRule, ruleIdents: ruleIdents, rowAlerts: rowAlerts, RULE_FUNCS: RULE_FUNCS,
+    dayKey: dayKey, metricId: metricId, snapshotItems: snapshotItems, takeSnapshot: takeSnapshot,
+    ensureSnapshot: ensureSnapshot, loadTrend: loadTrend, trendSeries: trendSeries,
     cacheRows: cacheRows, cachedRows: cachedRows,
     groupBy: groupBy, svgChart: svgChart,
     BASEMAPS: BASEMAPS, gibsLayer: gibsLayer, ensureLeaflet: ensureLeaflet,
@@ -2359,7 +2646,10 @@ document.addEventListener("keydown", function (e) {
 });
 
 function select(id) {
-  if (id !== CUR) FILTER = "";
+  /* الانتقال يمسح البحث، إلا إذا جاء من «افتح التبويب» فى صفحة الكيان
+     فيُحمَل معه اسم الكيان كمرشّح */
+  if (id !== CUR) { FILTER = PENDING_FILTER || ""; }
+  PENDING_FILTER = null;
   CUR = id; markActive(id);
   var eb = document.getElementById("tb-eyebrow"), ti = document.getElementById("tb-title");
   if (id === "__admin") { eb.textContent = "بناء التطبيق من داخله"; ti.textContent = "إدارة التطبيق"; return renderAdmin(); }
@@ -2406,6 +2696,290 @@ function tabHeadline(entry) {
   });
   return out;
 }
+/* ---------------- صفحة الكيان الواحد (كل ما يخص مجرى فى شاشة) ---------------- */
+var ENTITY_SEL = {};
+var PENDING_FILTER = null;
+function entityValues(w) {
+  var src = ALL[w.entityTab];
+  if (!src) return [];
+  var seen = {}, out = [];
+  src.rows.forEach(function (r) {
+    var v = r[w.entityField];
+    if (v === undefined || v === null || v === "") return;
+    v = String(v);
+    if (seen[v]) return;
+    seen[v] = 1; out.push(v);
+  });
+  return out.sort();
+}
+function entitySections(w, val) {
+  /* لكل تبويب مرتبط بالكيان: سجلاته المطابقة فقط */
+  var secs = [];
+  toArr(S.schema.tabs).forEach(function (t) {
+    if (t.id === w.entityTab) return;
+    var e = ALL[t.id];
+    if (!e) return;
+    var rows = E.entityRows(t, e.rows, w.entityTab, w.matchField || "canal", val);
+    if (rows === null) return;             /* غير مرتبط */
+    secs.push({ tab: t, rows: rows });
+  });
+  return secs;
+}
+/* ---------------- عنصر الاتجاه الزمنى ---------------- */
+/* ---------------- قائمة الإنذارات عبر كل التبويبات ---------------- */
+function alertsPanel(w) {
+  var p = panel("إنذارات", w.label || "ما يحتاج تدخّلاً");
+  var rowsOut = [], scanned = 0, ruled = 0;
+  toArr(S.schema.tabs).forEach(function (t) {
+    var rules = toArr(t.alerts);
+    if (!rules.length) return;
+    ruled++;
+    var e = ALL[t.id];
+    if (!e) return;
+    e.rows.forEach(function (r) {
+      scanned++;
+      var fired = E.rowAlerts(t, r);
+      if (!fired.length) return;
+      var lab = "";
+      toArr(t.fields).forEach(function (f) {
+        if (!lab && (f.type === "text" || f.type === "ref")) lab = String(r[f.id] || "");
+      });
+      fired.forEach(function (a) { rowsOut.push({ tab: t, label: lab || "سجل", a: a }); });
+    });
+  });
+  if (!ruled) {
+    p.appendChild(el("div", { "class": "hint" }, [
+      "لا قواعد إنذار معرَّفة بعد. تُضاف من: إدارة التطبيق ← فتح البناء ← قواعد الإنذار."
+    ]));
+    return p;
+  }
+  var danger = rowsOut.filter(function (x) { return x.a.level === "خطر"; }).length;
+  var g = el("div", { "class": "grid g3" });
+  g.appendChild(kpiCard("!", danger ? "" : "green", "إنذارات خطر", String(danger), "إنذار"));
+  g.appendChild(kpiCard("⚑", "sand", "تنبيهات", String(rowsOut.length - danger), "تنبيه"));
+  g.appendChild(kpiCard("#", "green", "سجلات مفحوصة", String(scanned), "سجل"));
+  p.appendChild(g);
+  if (!rowsOut.length) {
+    p.appendChild(el("div", { "class": "empty" }, ["لا شىء يحتاج تدخّلاً — كل السجلات مطابقة للقواعد."]));
+    return p;
+  }
+  rowsOut.sort(function (a, b) { return (a.a.level === "خطر" ? 0 : 1) - (b.a.level === "خطر" ? 0 : 1); });
+  rowsOut.slice(0, w.limit || 25).forEach(function (x) {
+    var go = el("button", { "class": "btn mini" }, ["افتح"]);
+    go.onclick = function () { PENDING_FILTER = x.label; select(x.tab.id); };
+    p.appendChild(el("div", { "class": "adm-row" }, [
+      el("span", { "class": "pill " + (x.a.level === "خطر" ? "danger" : "sand") }, [x.a.level]),
+      el("span", { "class": "t" }, [x.label]),
+      el("span", { "class": "m" }, [x.tab.title + " · " + (x.a.msg || x.a.expr)]),
+      el("span", { "class": "sp" }), go
+    ]));
+  });
+  if (rowsOut.length > (w.limit || 25)) {
+    p.appendChild(el("div", { "class": "hint" }, ["معروض " + (w.limit || 25) + " من " + rowsOut.length + "."]));
+  }
+  return p;
+}
+
+function trendPanel(w) {
+  var p = panel("اتجاه", w.label || "تطوّر المؤشر");
+  p.appendChild(el("div", { "class": "empty" }, ["جارٍ قراءة اللقطات…"]));
+  E.loadTrend().then(function (snaps) {
+    p.innerHTML = "";
+    p.appendChild(el("span", { "class": "eyebrow" }, ["اتجاه"]));
+    p.appendChild(el("h2", {}, [w.label || "تطوّر المؤشر"]));
+    var all = E.trendSeries(snaps, w.mid);
+    var days = w.days || 30;
+    var ser = all.slice(-days);
+    if (ser.length < 2) {
+      p.appendChild(el("div", { "class": "empty" }, [
+        ser.length === 1
+          ? "لقطة واحدة فقط حتى الآن — الاتجاه يظهر بعد يوم ثانٍ من الاستخدام."
+          : "لا لقطات لهذا المؤشر بعد. تُؤخذ لقطة تلقائياً عند أول فتح للتطبيق كل يوم."
+      ]));
+      return;
+    }
+    var last = ser[ser.length - 1], prev = ser[ser.length - 2];
+    var weekIdx = Math.max(0, ser.length - 8);
+    var weekAgo = ser[weekIdx];
+    function delta(a, b) {
+      if (!b || !isFinite(b.value)) return null;
+      var d = a.value - b.value;
+      var pc = b.value !== 0 ? (d / Math.abs(b.value)) * 100 : null;
+      return { d: d, pc: pc, from: b.day };
+    }
+    var d1 = delta(last, prev), d7 = delta(last, weekAgo);
+    var g = el("div", { "class": "grid g3" });
+    g.appendChild(kpiCard("◉", "", last.name || "القيمة الحالية", fmt(last.value), last.unit, "لقطة " + last.day));
+    function deltaCard(dd, title) {
+      if (!dd) return kpiCard("—", "", title, "—", "", "لا لقطة مقارنة");
+      var cls = dd.d > 0 ? "green" : (dd.d < 0 ? "sand" : "");
+      var sign = dd.d > 0 ? "+" : "";
+      return kpiCard(dd.d >= 0 ? "↑" : "↓", cls, title, sign + fmt(dd.d), last.unit,
+        (dd.pc === null ? "" : sign + fmt(dd.pc) + "% ") + "منذ " + dd.from);
+    }
+    g.appendChild(deltaCard(d1, "التغيّر عن اللقطة السابقة"));
+    g.appendChild(deltaCard(d7, "التغيّر عن أسبوع"));
+    p.appendChild(g);
+    p.appendChild(el("div", { "class": "chart-box" }, [E.svgChart(ser, "line")]));
+    p.appendChild(el("div", { "class": "hint" }, [
+      "المصدر: لقطات يومية محفوظة فى القاعدة — " + ser.length + " لقطة معروضة من " + all.length +
+      ". اللقطة تُؤخذ آلياً عند أول فتح للتطبيق فى اليوم، فالأيام التى لم يُفتح فيها لا لقطة لها."
+    ]));
+  }).catch(function (e) {
+    p.innerHTML = "";
+    p.appendChild(el("div", { "class": "empty" }, ["تعذّر تحميل اللقطات: " + e.message]));
+  });
+  return p;
+}
+
+function entityPanel(w) {
+  var p = panel("صفحة الكيان", w.label || "ملف المجرى");
+  var src = ALL[w.entityTab];
+  if (!src) {
+    p.appendChild(el("div", { "class": "empty" }, ["التبويب المرجعى غير موجود (ربما حُذف)."]));
+    return p;
+  }
+  var vals = entityValues(w);
+  var sel = el("select");
+  sel.appendChild(el("option", { value: "" }, ["— اختر من " + src.title + " —"]));
+  vals.forEach(function (v) { sel.appendChild(el("option", { value: v }, [v])); });
+  if (ENTITY_SEL[w.id]) sel.value = ENTITY_SEL[w.id];
+  sel.onchange = function () { ENTITY_SEL[w.id] = sel.value; select(CUR); };
+  p.appendChild(el("div", { "class": "frm" }, [el("div", { "class": "fld" }, [el("label", {}, [src.title]), sel])]));
+
+  var val = ENTITY_SEL[w.id] || "";
+  if (!val) {
+    p.appendChild(el("div", { "class": "hint" }, [
+      vals.length ? "اختر سجلاً لعرض كل ما يخصه من باقى التبويبات فى شاشة واحدة."
+        : ("لا سجلات فى " + src.title + " بعد — أضف أولاً.")
+    ]));
+    return p;
+  }
+
+  /* بطاقة الكيان نفسه */
+  var me = null;
+  src.rows.forEach(function (r) { if (!me && String(r[w.entityField]) === val) me = r; });
+  if (me) {
+    var head = toArr(src.tab.fields).filter(function (f) { return f.id !== w.entityField; }).slice(0, 6);
+    if (head.length) {
+      var tb0 = el("table"), hr0 = el("tr"), br0 = el("tr");
+      head.forEach(function (f) {
+        hr0.appendChild(el("th", {}, [f.label + (f.unit ? " (" + f.unit + ")" : "")]));
+        br0.appendChild(el("td", {}, [(me[f.id] === undefined || me[f.id] === "") ? "—" : String(me[f.id])]));
+      });
+      tb0.appendChild(el("thead", {}, [hr0]));
+      tb0.appendChild(el("tbody", {}, [br0]));
+      p.appendChild(el("div", { "class": "tbl-wrap" }, [tb0]));
+    }
+  }
+
+  var secs = entitySections(w, val), total = 0, pts = [];
+  secs.forEach(function (sc) { total += sc.rows.length; });
+  p.appendChild(el("div", { "class": "ops" }, [
+    el("span", {}, [el("b", {}, [String(total)]), " سجل مرتبط"]),
+    el("span", {}, [el("b", {}, [String(secs.length)]), " تبويب"]),
+    el("span", { "class": "sp" }),
+    (function () {
+      var rb = el("button", { "class": "btn mini" }, ["⎙ تقرير هذا السجل"]);
+      rb.onclick = function () { reportForEntity(w, val, secs, me, src); };
+      return rb;
+    })()
+  ]));
+
+  if (!total) {
+    p.appendChild(el("div", { "class": "empty" }, ["لا توجد سجلات مرتبطة بـ«" + val + "» فى التبويبات الأخرى بعد."]));
+    return p;
+  }
+
+  secs.forEach(function (sc) {
+    if (!sc.rows.length) return;
+    var box = el("div", { "class": "sub-panel" });
+    box.appendChild(el("h3", {}, [(sc.tab.icon || "▣") + " " + sc.tab.title + " — " + sc.rows.length + " سجل"]));
+
+    /* مؤشرات التبويب محسوبة على سجلات هذا الكيان وحده، بتعريف التبويب نفسه */
+    var cards = [];
+    toArr(sc.tab.widgets).forEach(function (wg) {
+      if (wg.type === "kpi") {
+        try { cards.push([wg.label, fmt(E.aggregate(wg.agg || "count", wg.field || "", sc.rows)), wg.unit || ""]); } catch (e) { }
+      } else if (wg.type === "formula") {
+        try { cards.push([wg.label, fmt(E.evalExpr(wg.expr, sc.rows)), wg.unit || ""]); } catch (e) { }
+      }
+    });
+    if (cards.length) {
+      var g = el("div", { "class": "grid " + (cards.length >= 3 ? "g3" : "g2"), style: "margin-top:10px" });
+      cards.forEach(function (c2) { g.appendChild(kpiCard("◈", "", c2[0], c2[1], c2[2])); });
+      box.appendChild(g);
+    }
+
+    var flds = toArr(sc.tab.fields).slice(0, 5);
+    var tb = el("table"), hr = el("tr");
+    flds.forEach(function (f) { hr.appendChild(el("th", {}, [f.label])); });
+    tb.appendChild(el("thead", {}, [hr]));
+    var bd = el("tbody");
+    sc.rows.slice(0, 8).forEach(function (r) {
+      var tr = el("tr");
+      flds.forEach(function (f) { tr.appendChild(el("td", {}, [(r[f.id] === undefined || r[f.id] === "") ? "—" : String(r[f.id])])); });
+      bd.appendChild(tr);
+      var la = parseFloat(r.lat), ln = parseFloat(r.lng);
+      if (!isNaN(la) && !isNaN(ln)) pts.push({ la: la, ln: ln, n: sc.tab.title });
+    });
+    sc.rows.forEach(function (r) {
+      var la = parseFloat(r.lat), ln = parseFloat(r.lng);
+      if (!isNaN(la) && !isNaN(ln)) pts.push({ la: la, ln: ln, n: sc.tab.title });
+    });
+    tb.appendChild(bd);
+    box.appendChild(el("div", { "class": "tbl-wrap" }, [tb]));
+    if (sc.rows.length > 8) box.appendChild(el("div", { "class": "hint" }, ["معروض ٨ من " + sc.rows.length + " — افتح التبويب للباقى."]));
+    var go = el("button", { "class": "btn mini" }, ["افتح " + sc.tab.title]);
+    go.onclick = function () { PENDING_FILTER = val; select(sc.tab.id); };
+    box.appendChild(el("div", { "class": "actions" }, [go]));
+    p.appendChild(box);
+  });
+
+  if (pts.length) {
+    var mbox = el("div", { "class": "map-box", id: "emap-" + w.id });
+    p.appendChild(el("div", { "class": "sub-panel" }, [el("h3", {}, ["مواقع كل ما يخص «" + val + "»"]), mbox]));
+    E.ensureLeaflet(function (err) {
+      if (err) { mbox.innerHTML = ""; mbox.appendChild(el("div", { "class": "empty" }, [err.message])); return; }
+      var base = E.BASEMAPS.esri;
+      var m = L.map(mbox.id, { scrollWheelZoom: false });
+      L.tileLayer(base.url, { attribution: base.attr, maxZoom: base.max }).addTo(m);
+      var g = [];
+      var seen = {};
+      pts.forEach(function (pt) {
+        var k = pt.la + "," + pt.ln + "," + pt.n;
+        if (seen[k]) return; seen[k] = 1;
+        g.push(L.marker([pt.la, pt.ln]).addTo(m).bindPopup(pt.n));
+      });
+      if (g.length) m.fitBounds(L.featureGroup(g).getBounds().pad(0.3));
+      setTimeout(function () { m.invalidateSize(); }, 250);
+    });
+  }
+  return p;
+}
+function reportForEntity(w, val, secs, me, src) {
+  var sections = [];
+  if (me) {
+    var body0 = el("div");
+    body0.appendChild(repSection("بيانات " + src.title));
+    body0.appendChild(repTable(["البيان", "القيمة"],
+      toArr(src.tab.fields).map(function (f) {
+        return [f.label + (f.unit ? " (" + f.unit + ")" : ""), (me[f.id] === undefined || me[f.id] === "") ? "ــــ" : me[f.id]];
+      })));
+    sections.push({ title: val, meta: "المصدر: " + src.title + " · تاريخ الاستخراج: " + stamp2(), body: body0 });
+  }
+  secs.forEach(function (sc) {
+    if (!sc.rows.length) return;
+    sections.push({
+      title: sc.tab.title,
+      meta: "سجلات مرتبطة بـ«" + val + "»: " + sc.rows.length + " · " + sourceLine(sc.tab, sc.rows),
+      body: tabReportBody(sc.tab, sc.rows)
+    });
+  });
+  if (!sections.length) { toast("لا بيانات لتقرير هذا السجل", true); return; }
+  buildReport("ملف: " + val, sections);
+}
+
 function overviewPanel(w, cur) {
   var p = panel("نظرة المدير", w.label || "حالة كل التبويبات");
   var list = toArr(S.schema.tabs).filter(function (t) { return t.id !== cur.id; });
@@ -2549,6 +3123,105 @@ function designPanel(w, t) {
     return { v: v, out: out };
   }
 
+  /* ---- تحويل ناتج التصميم إلى بند تنفيذى فى تبويب متابعة ---- */
+  var xferBox = el("div", { "class": "sub-panel", style: "display:none" });
+  function buildXfer(r) {
+    xferBox.innerHTML = "";
+    xferBox.style.display = "block";
+    xferBox.appendChild(el("h3", {}, ["تحويل الناتج إلى بند تنفيذى"]));
+
+    /* التبويبات الصالحة هدفاً: أى تبويب فيه حقل رقمى واحد على الأقل */
+    var targets = toArr(S.schema.tabs).filter(function (tt) {
+      if (tt.id === t.id) return false;
+      var has = false;
+      toArr(tt.fields).forEach(function (f) { if (f.type === "number") has = true; });
+      return has;
+    });
+    if (!targets.length) {
+      xferBox.appendChild(el("div", { "class": "hint" }, [
+        "لا يوجد تبويب متابعة فيه حقل رقمى. ركّب قالب «سجل الأعمال الجارية» أو أضف حقلاً رقمياً فى تبويب الأعمال أولاً."
+      ]));
+      return;
+    }
+    var tSel = el("select");
+    targets.forEach(function (tt) { tSel.appendChild(el("option", { value: tt.id }, [tt.title])); });
+
+    /* القيم الرقمية القابلة للنقل من نتيجة الحساب */
+    var nums = [];
+    r.out.out.forEach(function (o, i) {
+      var isText = (o[1] === 0 && o[2] && isNaN(parseFloat(o[2])));
+      if (!isText && typeof o[1] === "number" && isFinite(o[1])) nums.push({ i: i, label: o[0], val: o[1], unit: o[2] || "" });
+    });
+    var vSel = el("select");
+    nums.forEach(function (n2) { vSel.appendChild(el("option", { value: String(n2.i) }, [n2.label + " = " + fmt(n2.val) + (n2.unit ? " " + n2.unit : "")])); });
+
+    var fSel = el("select"), labSel = el("select"), labVal = el("input", { type: "text", placeholder: "اسم المجرى أو البند" });
+    function target() {
+      var f = null;
+      targets.forEach(function (tt) { if (tt.id === tSel.value) f = tt; });
+      return f;
+    }
+    function rebuild() {
+      var tt = target();
+      fSel.innerHTML = ""; labSel.innerHTML = "";
+      toArr(tt.fields).forEach(function (f) {
+        if (f.type === "number") fSel.appendChild(el("option", { value: f.id }, [f.label + (f.unit ? " (" + f.unit + ")" : "")]));
+        if (f.type === "text" || f.type === "ref" || f.type === "select") labSel.appendChild(el("option", { value: f.id }, [f.label]));
+      });
+      if (!labSel.childNodes.length) labSel.appendChild(el("option", { value: "" }, ["— بلا حقل وصفى —"]));
+    }
+    tSel.onchange = rebuild;
+    rebuild();
+
+    xferBox.appendChild(el("div", { "class": "frm" }, [
+      el("div", { "class": "fld" }, [el("label", {}, ["تبويب المتابعة"]), tSel]),
+      el("div", { "class": "fld" }, [el("label", {}, ["القيمة المنقولة"]), vSel]),
+      el("div", { "class": "fld" }, [el("label", {}, ["الحقل المستقبِل"]), fSel]),
+      el("div", { "class": "fld" }, [el("label", {}, ["الحقل الوصفى"]), labSel]),
+      el("div", { "class": "fld" }, [el("label", {}, ["قيمته"]), labVal])
+    ]));
+    var mk = el("button", { "class": "btn solid" }, ["أنشئ البند"]);
+    mk.onclick = function () {
+      var tt = target();
+      if (!fSel.value) { toast("اختر الحقل المستقبِل", true); return; }
+      var pickNum = null;
+      nums.forEach(function (n2) { if (String(n2.i) === String(vSel.value)) pickNum = n2; });
+      if (!pickNum) { toast("اختر القيمة المنقولة", true); return; }
+      var rec = {};
+      rec[fSel.value] = pickNum.val;
+      if (labSel.value && labVal.value) rec[labSel.value] = labVal.value;
+      /* قيم بدء افتراضية إن كانت حقولها موجودة فى التبويب الهدف */
+      toArr(tt.fields).forEach(function (f) {
+        if (f.id === "pct") rec.pct = 0;
+        if (f.id === "status" && String(f.options || "").indexOf("لم يبدأ") >= 0) rec.status = "لم يبدأ";
+        if (f.id === "note") rec.note = "مصدره تصميم: " + def.name + " — " + pickNum.label + " = " + fmt(pickNum.val) + (pickNum.unit ? " " + pickNum.unit : "");
+      });
+      rec.by = who();
+      rec.srcDesign = def.name;          /* أثر المصدر: البند يعرف من أين جاء */
+      rec.srcValue = pickNum.label;
+      var errs = validateRecord(tt, rec);
+      if (errs.length) {
+        xferBox.appendChild(el("div", { "class": "errbox" }, [
+          "• التبويب الهدف يطلب حقولاً إلزامية غير متوفرة هنا: "
+          + errs.map(function (e2) { return e2.msg; }).join(" · ")
+          + " — أنشئ البند من تبويب المتابعة نفسه أو ارفع الإلزام عن هذه الحقول."
+        ]));
+        return;
+      }
+      E.db.post(E.cfg.root + "/data/records/" + tt.id, rec).then(function () {
+        audit("بند تنفيذى من تصميم (" + def.name + ") إلى: " + tt.title);
+        toast("اتعمل البند فى " + tt.title);
+        var go = el("button", { "class": "btn mini" }, ["افتح " + tt.title]);
+        go.onclick = function () { select(tt.id); };
+        xferBox.appendChild(el("div", { "class": "actions" }, [go]));
+      }).catch(function (e2) { toast("فشل الإنشاء: " + e2.message, true); });
+    };
+    xferBox.appendChild(el("div", { "class": "actions" }, [mk]));
+    xferBox.appendChild(el("div", { "class": "hint" }, [
+      "البند يُنشأ بنسبة تنفيذ صفر وموقف «لم يبدأ» إن وُجدا، ويحمل أثر مصدره (اسم الحساب والقيمة) — فتقارن لاحقاً المنفَّذ بالمصمَّم."
+    ]));
+  }
+
   var calc = el("button", { "class": "btn solid" }, ["احسب"]);
   calc.onclick = function () { compute(); };
   var save = el("button", { "class": "btn" }, ["احفظ النتيجة كسجل"]);
@@ -2567,7 +3240,14 @@ function designPanel(w, t) {
       renderTab(t);
     }).catch(function (e) { toast("فشل الحفظ: " + e.message, true); });
   };
-  p.appendChild(el("div", { "class": "actions" }, [calc, save]));
+  var xfer = el("button", { "class": "btn" }, ["حوّله بنداً تنفيذياً"]);
+  xfer.onclick = function () {
+    var r = compute();
+    if (!r) { toast("صحّح المدخلات أولاً", true); return; }
+    buildXfer(r);
+  };
+  p.appendChild(el("div", { "class": "actions" }, [calc, save, xfer]));
+  p.appendChild(xferBox);
   p.appendChild(el("div", { "class": "hint" }, [
     "المخرَج مقاس هيدروليكى وكميات تقديرية — وليس تصميماً إنشائياً: حديد التسليح وسُمك البلاطات والأساسات خارج نطاق هذه الأداة."
   ]));
@@ -2772,6 +3452,19 @@ function tabReportBody(t, rows) {
     }
   });
 
+  /* الإنذارات المُطلَقة */
+  if (toArr(t.alerts).length && rows.length) {
+    var fires = [];
+    rows.forEach(function (r) {
+      var lab = "";
+      fields.forEach(function (f) { if (!lab && (f.type === "text" || f.type === "ref")) lab = String(r[f.id] || ""); });
+      E.rowAlerts(t, r).forEach(function (a) { fires.push([lab || "سجل", a.level, a.msg, a.expr]); });
+    });
+    box.appendChild(repSection("الإنذارات المُطلَقة"));
+    if (fires.length) box.appendChild(repTable(["السجل", "المستوى", "البيان", "الشرط"], fires));
+    else box.appendChild(el("p", { "class": "rep-note" }, ["لا إنذارات — كل السجلات مطابقة للقواعد المعرَّفة."]));
+  }
+
   /* جداول البيانات */
   if (fields.length && rows.length) {
     var hasTable = false;
@@ -2837,7 +3530,7 @@ function reportForAll() {
 }
 
 function isCross(w) {
-  return w.type === "overview" || w.type === "xkpi" || w.type === "xchart";
+  return w.type === "overview" || w.type === "xkpi" || w.type === "xchart" || w.type === "entity" || w.type === "alerts";
 }
 function renderTab(t) {
   var c = document.getElementById("content"); c.innerHTML = "";
@@ -2950,8 +3643,11 @@ function drawTab(t, rows, offline) {
     if (w.type === "hydro") { c.appendChild(hydroPanel(w, rows, t)); return; }
     if (w.type === "design") { c.appendChild(designPanel(w, t)); return; }
     if (w.type === "overview") { c.appendChild(overviewPanel(w, t)); return; }
+    if (w.type === "entity") { c.appendChild(entityPanel(w)); return; }
     if (w.type === "xchart") { c.appendChild(xchartPanel(w)); return; }
     if (w.type === "activity") { c.appendChild(activityPanel(w)); return; }
+    if (w.type === "trend") { c.appendChild(trendPanel(w)); return; }
+    if (w.type === "alerts") { c.appendChild(alertsPanel(w)); return; }
     if (w.type === "table") {
       var p3 = panel("جدول", w.label || "السجلات");
       var sBox = el("input", { type: "text", placeholder: "بحث فى السجلات… (اضغط / للانتقال هنا)", "class": "search" });
@@ -2975,6 +3671,8 @@ function drawTab(t, rows, offline) {
       else {
         var tb = el("table"), hr = el("tr");
         fields.forEach(function (f) { hr.appendChild(el("th", {}, [f.label + (f.unit ? " (" + f.unit + ")" : "")])); });
+        var hasAlerts = toArr(t.alerts).length > 0;
+        if (hasAlerts) hr.appendChild(el("th", {}, ["الإنذار"]));
         var editable = !(t.source && t.source.type === "sheet") && !offline;
         if (editable) hr.appendChild(el("th", {}, [""]));
         tb.appendChild(el("thead", {}, [hr]));
@@ -2994,6 +3692,17 @@ function drawTab(t, rows, offline) {
         rowsView.forEach(function (r) {
           var tr = el("tr");
           fields.forEach(function (f) { tr.appendChild(el("td", {}, [r[f.id] === undefined || r[f.id] === "" ? "—" : String(r[f.id])])); });
+          if (hasAlerts) {
+            var fired = E.rowAlerts(t, r);
+            var ac = el("td");
+            if (fired.length) {
+              tr.className = "row-alert";
+              fired.forEach(function (a) {
+                ac.appendChild(el("span", { "class": "pill " + (a.level === "خطر" ? "danger" : "sand"), title: a.expr }, [a.msg || a.level]));
+              });
+            } else ac.appendChild(el("span", { "class": "pill green" }, ["سليم"]));
+            tr.appendChild(ac);
+          }
           if (editable) {
             var ed = el("button", { "class": "btn mini" }, ["تعديل"]);
             ed.onclick = function () { startEdit(t, r); };
@@ -3078,7 +3787,10 @@ function startEdit(t, r) {
   EDIT_KEY = r.__key;
   toArr(t.fields).forEach(function (f) {
     var v = r[f.id];
-    FORM.inputs[f.id].value = (v === undefined || v === null) ? "" : v;
+    var val = (v === undefined || v === null) ? "" : String(v);
+    var inp = FORM.inputs[f.id];
+    if (inp.getAttribute && inp.getAttribute("data-loading")) inp.setAttribute("data-want", val);
+    else inp.value = val;
   });
   FORM.title.textContent = "تعديل سجل قائم";
   FORM.save.textContent = "حفظ التعديل";
@@ -3102,9 +3814,45 @@ function drawForm(t, c, offline) {
   if (offline) return;
   var fp = panel("إدخال", "إضافة سجل جديد");
   var frm = el("div", { "class": "frm" }), inputs = {};
+  REF_ROWS = {};
   fields.forEach(function (f) {
     var inp;
-    if (f.type === "select") {
+    if (f.type === "ref") {
+      /* مرجع لتبويب آخر: اختيار من قائمة بدل الكتابة الحرة —
+         تُخزَّن القيمة المعروضة (فتظل الجداول والرسوم والتقارير تعمل كما هى)
+         ومعها مفتاح السجل المصدر فى حقل مخفى للربط لاحقاً */
+      var target = findTab(f.refTab);
+      if (!target) {
+        inp = el("input", { type: "text", placeholder: "التبويب المصدر محذوف — أدخل يدوياً" });
+      } else {
+        inp = el("select");
+        inp.appendChild(el("option", { value: "" }, ["— اختر من " + target.title + " —"]));
+        inp.setAttribute("data-loading", "1");
+        (function (fld, tgt, sel) {
+          E.loadRecords(tgt).then(function (res) {
+            REF_ROWS[fld.id] = res.rows;
+            var seen = {}, added = 0;
+            res.rows.forEach(function (r) {
+              var v = r[fld.refField];
+              if (v === undefined || v === null || v === "") return;
+              v = String(v);
+              if (seen[v]) return;
+              seen[v] = r.__key; added++;
+              sel.appendChild(el("option", { value: v }, [v]));
+            });
+            sel.removeAttribute("data-loading");
+            var want = sel.getAttribute("data-want");
+            if (want) { sel.value = want; sel.removeAttribute("data-want"); }
+            if (!added) {
+              sel.appendChild(el("option", { value: "" }, ["(لا سجلات فى " + tgt.title + " بعد)"]));
+            }
+          }).catch(function (e) {
+            sel.removeAttribute("data-loading");
+            sel.appendChild(el("option", { value: "" }, ["تعذّر التحميل: " + e.message]));
+          });
+        })(f, target, inp);
+      }
+    } else if (f.type === "select") {
       inp = el("select");
       String(f.options || "").split(",").forEach(function (o) { o = o.trim(); if (o) inp.appendChild(el("option", { value: o }, [o])); });
     } else {
@@ -3129,6 +3877,13 @@ function drawForm(t, c, offline) {
     fields.forEach(function (f) {
       var v = inputs[f.id].value;
       rec[f.id] = f.type === "number" ? (v === "" ? null : parseFloat(v)) : v;
+      if (f.type === "ref" && v) {
+        var hit = null;
+        (REF_ROWS[f.id] || []).forEach(function (r) {
+          if (!hit && String(r[f.refField]) === String(v)) hit = r;
+        });
+        if (hit) rec[f.id + "_key"] = hit.__key;
+      }
     });
     rec.by = who();
     var errs = validateRecord(t, rec);
@@ -3297,6 +4052,7 @@ var WIZ = null;   /* {step, ans, preview} */
 var TPL_GROUP = "";   /* مرشّح مجال القوالب */
 var ADMIN_CFG = null; /* إعدادات بوابة الإدارة من القاعدة */
 var ADMIN_LOADED = false;
+var REF_ROWS = {};    /* سجلات التبويبات المرجعية للنموذج الحالى */
 /* المسؤول = لا حماية مفعّلة، أو مفعّلة وجلسته مفتوحة.
    يُستدعى قبل كل إجراء مقيَّد (الرجوع لنسخة · حذف السجلات). */
 function isAdmin() { return !E.gate.isSet(ADMIN_CFG) || E.gate.isUnlocked(); }
@@ -3567,7 +4323,19 @@ function renderAdmin() {
     "بذرة التطبيق لا تُطبَّق إلا على قاعدة فارغة — التطبيق القائم يحتفظ بمخططه المنشور. "
     + "لتركيب لوحة قيادة على تطبيق موجود استخدم الزر الأول: يبنيها من تبويباتك الحالية وينشرها كإصدار جديد قابل للتراجع."
   ]));
-  tools.appendChild(el("div", { "class": "actions" }, [dashBtn, expBtn, impBtn, impInput]));
+  var snapBtn = el("button", { "class": "btn" }, ["خُد لقطة مؤشرات الآن"]);
+  snapBtn.onclick = function () {
+    snapBtn.textContent = "جارٍ أخذ اللقطة…";
+    E.takeSnapshot(S.schema, who()).then(function (n) {
+      snapBtn.textContent = "خُد لقطة مؤشرات الآن";
+      toast("اتسجّلت لقطة بـ" + n + " مؤشر");
+      audit("لقطة مؤشرات يدوية");
+    }).catch(function (e) {
+      snapBtn.textContent = "خُد لقطة مؤشرات الآن";
+      toast("فشلت اللقطة: " + e.message, true);
+    });
+  };
+  tools.appendChild(el("div", { "class": "actions" }, [dashBtn, expBtn, impBtn, snapBtn, impInput]));
   c.appendChild(tools);
 
   c.appendChild(wizardPanel());
@@ -3594,7 +4362,8 @@ function renderAdmin() {
       byGroup[g].forEach(function (tpl) {
         var b = el("button", { "class": "btn mini solid" }, ["تركيب"]);
         b.onclick = function () {
-          var t = tpl.build();
+          var t = tpl.build({ tabs: toArr(S.schema.tabs) });
+          if (!t || t.error) { toast(t && t.error ? t.error : "تعذّر بناء القالب", true); return; }
           S.schema.tabs = toArr(S.schema.tabs).concat([t]);
           ADM_TAB = t.id;
           pub("تركيب قالب: " + tpl.name);
@@ -3736,14 +4505,35 @@ function tabEditor(t) {
     box.appendChild(el("div", { "class": "adm-row" }, [
       el("span", { "class": "pill lake" }, ["حقل"]),
       el("span", { "class": "t" }, [f.label]),
-      el("span", { "class": "m" }, [f.id + " · " + f.type + (f.unit ? " · " + f.unit : "") + (ruleText(t, f) ? " · " + ruleText(t, f) : "")]),
+      el("span", { "class": "m" }, [f.id + " · " + (f.type === "ref"
+        ? ("مرجع → " + ((findTab(f.refTab) || { title: "تبويب محذوف" }).title) + "." + f.refField)
+        : f.type) + (f.unit ? " · " + f.unit : "") + (ruleText(t, f) ? " · " + ruleText(t, f) : "")]),
       el("span", { "class": "sp" }), d
     ]));
   });
   var fl = el("input", { type: "text", placeholder: "مثال: التصرف" });
   var fk = el("input", { type: "text", placeholder: "مفتاح إنجليزى مثل q", maxlength: "18" });
   var ft = el("select");
-  [["text", "نص"], ["number", "رقم"], ["date", "تاريخ"], ["select", "قائمة"]].forEach(function (o) { ft.appendChild(el("option", { value: o[0] }, [o[1]])); });
+  [["text", "نص"], ["number", "رقم"], ["date", "تاريخ"], ["select", "قائمة"], ["ref", "مرجع لتبويب آخر"]].forEach(function (o) { ft.appendChild(el("option", { value: o[0] }, [o[1]])); });
+  /* إعداد المرجع: التبويب المصدر + الحقل الذى يظهر للمستخدم */
+  var fref = el("select");
+  toArr(S.schema.tabs).forEach(function (o) {
+    if (o.id !== t.id) fref.appendChild(el("option", { value: o.id }, [o.title]));
+  });
+  if (!fref.childNodes.length) fref.appendChild(el("option", { value: "" }, ["— لا تبويبات أخرى —"]));
+  var frefF = el("select");
+  function buildRefFields() {
+    frefF.innerHTML = "";
+    var tgt = null;
+    toArr(S.schema.tabs).forEach(function (o) { if (o.id === fref.value) tgt = o; });
+    toArr(tgt ? tgt.fields : []).forEach(function (f2) {
+      if (f2.type === "number") return;
+      frefF.appendChild(el("option", { value: f2.id }, [f2.label]));
+    });
+    if (!frefF.childNodes.length) frefF.appendChild(el("option", { value: "" }, ["— لا حقول نصية —"]));
+  }
+  fref.onchange = buildRefFields;
+  buildRefFields();
   var fu = el("input", { type: "text", placeholder: "م³/ث" });
   var fo = el("input", { type: "text", placeholder: "للقائمة: قيمة، قيمة" });
   var freq = el("select");
@@ -3760,12 +4550,17 @@ function tabEditor(t) {
     if (fmin.value !== "" && fmax.value !== "" && parseFloat(fmin.value) > parseFloat(fmax.value)) {
       toast("الحد الأدنى أكبر من الأقصى", true); return;
     }
-    t.fields = toArr(t.fields).concat([{
+    var nf = {
       id: key, label: fl.value.trim(), type: ft.value, unit: fu.value, options: fo.value,
       required: freq.value === "1",
       min: fmin.value === "" ? "" : parseFloat(fmin.value),
       max: fmax.value === "" ? "" : parseFloat(fmax.value)
-    }]);
+    };
+    if (ft.value === "ref") {
+      if (!fref.value || !frefF.value) { toast("اختر التبويب المصدر وحقل العرض", true); return; }
+      nf.refTab = fref.value; nf.refField = frefF.value;
+    }
+    t.fields = toArr(t.fields).concat([nf]);
     pub("حقل جديد (" + fl.value.trim() + ") فى " + t.title);
   };
   box.appendChild(el("div", { "class": "frm" }, [
@@ -3774,12 +4569,66 @@ function tabEditor(t) {
     el("div", { "class": "fld" }, [el("label", {}, ["النوع"]), ft]),
     el("div", { "class": "fld" }, [el("label", {}, ["الوحدة"]), fu]),
     el("div", { "class": "fld" }, [el("label", {}, ["خيارات القائمة"]), fo]),
+    el("div", { "class": "fld" }, [el("label", {}, ["التبويب المصدر (للمرجع)"]), fref]),
+    el("div", { "class": "fld" }, [el("label", {}, ["حقل العرض (للمرجع)"]), frefF]),
     el("div", { "class": "fld" }, [el("label", {}, ["الإلزام"]), freq]),
     el("div", { "class": "fld" }, [el("label", {}, ["أدنى قيمة (للأرقام)"]), fmin]),
     el("div", { "class": "fld" }, [el("label", {}, ["أقصى قيمة (للأرقام)"]), fmax])
   ]));
-  box.appendChild(el("div", { "class": "hint" }, ["حقول خط العرض والطول تُقيَّد تلقائياً بـ٩٠± و١٨٠± بمجرد استخدامها فى عنصر خريطة."]));
+  box.appendChild(el("div", { "class": "hint" }, [
+    "حقول خط العرض والطول تُقيَّد تلقائياً بـ٩٠± و١٨٠± بمجرد استخدامها فى عنصر خريطة. "
+    + "وحقل «مرجع لتبويب آخر» يستبدل الكتابة الحرة باختيار من سجلات تبويب مصدر — فتتوحّد الأسماء وتصحّ المجاميع والرسوم."
+  ]));
   box.appendChild(el("div", { "class": "actions" }, [fadd]));
+
+  /* --- قواعد الإنذار --- */
+  box.appendChild(el("div", { "class": "hint", style: "margin-top:16px;font-weight:700;color:var(--lake)" }, ["قواعد الإنذار"]));
+  toArr(t.alerts).forEach(function (a) {
+    var d = el("button", { "class": "btn mini warn" }, ["حذف"]);
+    d.onclick = function () {
+      t.alerts = toArr(t.alerts).filter(function (x) { return x.id !== a.id; });
+      pub("حذف قاعدة إنذار من " + t.title);
+    };
+    box.appendChild(el("div", { "class": "adm-row" }, [
+      el("span", { "class": "pill " + (a.level === "خطر" ? "danger" : "sand") }, [a.level]),
+      el("span", { "class": "t" }, [a.msg]),
+      el("span", { "class": "m", style: "direction:ltr" }, [a.expr]),
+      el("span", { "class": "sp" }), d
+    ]));
+  });
+  var ax = el("input", { type: "text", placeholder: "pct < 50", style: "direction:ltr;text-align:left" });
+  var am = el("input", { type: "text", placeholder: "التنفيذ متأخر" });
+  var al2 = el("select");
+  [["تنبيه", "تنبيه"], ["خطر", "خطر"]].forEach(function (o) { al2.appendChild(el("option", { value: o[0] }, [o[1]])); });
+  var aadd = el("button", { "class": "btn" }, ["أضف قاعدة وانشر"]);
+  aadd.onclick = function () {
+    var ex = (ax.value || "").trim();
+    if (!ex || !am.value.trim()) { toast("اكتب الشرط ونص الإنذار", true); return; }
+    /* فحص الشرط: صيغة سليمة + كل حقل مذكور موجود فعلاً */
+    var sample = {};
+    toArr(t.fields).forEach(function (f) { sample[f.id] = f.type === "number" ? 1 : "س"; });
+    try { E.evalRule(ex, sample); }
+    catch (e) { toast("الشرط غير صحيح: " + e.message, true); return; }
+    var known = toArr(t.fields).map(function (f) { return f.id; });
+    var bad = E.ruleIdents(ex).filter(function (idn) { return known.indexOf(idn) < 0; });
+    if (bad.length) { toast("حقول غير موجودة فى التبويب: " + bad.join(" · "), true); return; }
+    t.alerts = toArr(t.alerts).concat([{ id: uid("a"), expr: ex, msg: am.value.trim(), level: al2.value }]);
+    pub("قاعدة إنذار جديدة فى " + t.title);
+  };
+  box.appendChild(el("div", { "class": "frm" }, [
+    el("div", { "class": "fld" }, [el("label", {}, ["الشرط"]), ax]),
+    el("div", { "class": "fld" }, [el("label", {}, ["نص الإنذار"]), am]),
+    el("div", { "class": "fld" }, [el("label", {}, ["المستوى"]), al2])
+  ]));
+  box.appendChild(el("div", { "class": "hint" }, [
+    "الشرط يقبل: مفاتيح حقول هذا التبويب · أرقام ونصوص بين علامتى تنصيص · < <= > >= = != · and / or / not · أقواس · "
+    + "ودوال today() و empty(حقل) و filled(حقل). أمثلة: ",
+    el("span", { "class": "code" }, ["pct < 50"]), " · ",
+    el("span", { "class": "code" }, ["due < today() and pct < 100"]), " · ",
+    el("span", { "class": "code" }, ["len < planned"]),
+    " — والقيمة الغائبة لا تُطلق إنذاراً."
+  ]));
+  box.appendChild(el("div", { "class": "actions" }, [aadd]));
 
   /* --- العناصر --- */
   toArr(t.widgets).forEach(function (w) {
@@ -3790,11 +4639,13 @@ function tabEditor(t) {
       pub("حذف عنصر (" + (w.label || w.type) + ") من " + t.title);
     };
     var meta = w.type === "formula" ? w.expr
-      : (w.type === "design" ? ((E.DESIGN[w.dcalc] || { name: w.dcalc }).name)
+      : (w.type === "trend" ? ("مؤشر: " + (w.mid || ""))
+        : (w.type === "design" ? ((E.DESIGN[w.dcalc] || { name: w.dcalc }).name)
+        : (w.type === "entity" ? ("كيان من: " + ((findTab(w.entityTab) || { title: w.entityTab }).title))
         : (w.type === "xkpi" || w.type === "xchart" ? ("من: " + ((ALL[w.tabId] || {}).title || w.tabId))
         : (w.type === "hydro" ? (w.calc === "balance" ? ("اتزان: " + w.inField + " ↔ " + w.outField) : ((E.HYDRO[w.calc] || { name: w.calc }).name))
         : (w.type === "chart" ? (w.labelField + " → " + w.valueField)
-        : (w.type === "map" ? (w.latField + "/" + w.lngField) : ((w.agg || "") + " " + (w.field || ")")))))));
+        : (w.type === "map" ? (w.latField + "/" + w.lngField) : ((w.agg || "") + " " + (w.field || ")")))))))));
     box.appendChild(el("div", { "class": "adm-row" }, [
       el("span", { "class": "pill sand" }, [(E.WIDGETS[w.type] || { name: w.type }).name]),
       el("span", { "class": "t" }, [w.label || "—"]),
@@ -3858,6 +4709,16 @@ function tabEditor(t) {
         el("div", { "class": "fld" }, [el("label", {}, ["الحقل (للعدّ اتركه)"]), xIn.field])
       ]));
       xBox.appendChild(el("div", { "class": "hint" }, ["طريقة التجميع تُؤخذ من حقل «التجميع» بالأعلى."]));
+    } else if (wt.value === "entity") {
+      xIn.efield = tabFieldSelect(false);
+      xIn.match = el("input", { type: "text", value: "canal", placeholder: "canal" });
+      xBox.appendChild(el("div", { "class": "frm" }, [
+        el("div", { "class": "fld" }, [el("label", {}, ["حقل العرض (اسم الكيان)"]), xIn.efield]),
+        el("div", { "class": "fld" }, [el("label", {}, ["مفتاح المطابقة للتبويبات القديمة"]), xIn.match])
+      ]));
+      xBox.appendChild(el("div", { "class": "hint" }, [
+        "الربط يتم تلقائياً عبر حقول «مرجع» التى تشير لهذا التبويب. ومفتاح المطابقة احتياطى للتبويبات التى ما زالت تستخدم حقلاً نصياً بنفس الاسم."
+      ]));
     } else if (wt.value === "xchart") {
       xIn.lab = tabFieldSelect(false);
       xIn.val = tabFieldSelect(true);
@@ -3911,7 +4772,7 @@ function tabEditor(t) {
   buildHydMap();
   wt.onchange = function () {
     hydBox.style.display = wt.value === "hydro" ? "block" : "none";
-    var isX = (wt.value === "xkpi" || wt.value === "xchart");
+    var isX = (wt.value === "xkpi" || wt.value === "xchart" || wt.value === "entity");
     xBox.style.display = isX ? "block" : "none";
     if (isX) buildXBox();
   };
@@ -3919,6 +4780,18 @@ function tabEditor(t) {
   /* إعداد عنصر التصميم */
   var wdes = el("select");
   Object.keys(E.DESIGN).forEach(function (k) { wdes.appendChild(el("option", { value: k }, [E.DESIGN[k].name])); });
+
+  /* إعداد عنصر الاتجاه: قائمة بكل المؤشرات المعرَّفة فى كل التبويبات */
+  var wmid = el("select");
+  toArr(S.schema.tabs).forEach(function (tt) {
+    wmid.appendChild(el("option", { value: E.metricId(tt.id, "__count") }, ["عدد سجلات " + tt.title]));
+    toArr(tt.widgets).forEach(function (wg) {
+      if (wg.type === "kpi" || wg.type === "formula") {
+        wmid.appendChild(el("option", { value: E.metricId(tt.id, wg.id) }, [tt.title + " — " + (wg.label || wg.type)]));
+      }
+    });
+  });
+  if (!wmid.childNodes.length) wmid.appendChild(el("option", { value: "" }, ["— لا مؤشرات بعد —"]));
 
   var wadd = el("button", { "class": "btn" }, ["أضف عنصراً وانشر"]);
   wadd.onclick = function () {
@@ -3942,6 +4815,18 @@ function tabEditor(t) {
       w.labelField = xIn.lab ? xIn.lab.value : "";
       w.valueField = xIn.val ? xIn.val.value : "";
       if (!w.labelField || !w.valueField) { toast("التبويب المصدر لا يحوى حقولاً مناسبة", true); return; }
+    }
+    if (w.type === "entity") {
+      if (!wxtab.value) { toast("اختر التبويب المرجعى", true); return; }
+      w.entityTab = wxtab.value;
+      w.entityField = xIn.efield ? xIn.efield.value : "";
+      w.matchField = (xIn.match && xIn.match.value) || "canal";
+      if (!w.entityField) { toast("التبويب المرجعى بلا حقول عرض", true); return; }
+    }
+    if (w.type === "trend") {
+      if (!wmid.value) { toast("لا توجد مؤشرات لاختيارها", true); return; }
+      w.mid = wmid.value; w.days = 30;
+      if (!w.label) w.label = "اتجاه: " + wmid.options[wmid.selectedIndex >= 0 ? wmid.selectedIndex : 0].textContent;
     }
     if (w.type === "activity") { w.limit = 8; }
     if (w.type === "design") {
@@ -3994,6 +4879,7 @@ function tabEditor(t) {
     el("div", { "class": "fld" }, [el("label", {}, ["الأيقونة"]), wi]),
     el("div", { "class": "fld" }, [el("label", {}, ["نوع الحساب (هيدروليكا)"]), wcalc]),
     el("div", { "class": "fld" }, [el("label", {}, ["نوع التصميم"]), wdes]),
+    el("div", { "class": "fld" }, [el("label", {}, ["المؤشر (للاتجاه)"]), wmid]),
     el("div", { "class": "fld" }, [el("label", {}, ["التبويب المصدر (لوحة القيادة)"]), wxtab])
   ]));
   box.appendChild(xBox);
@@ -4123,6 +5009,8 @@ function boot(seed) {
     ADMIN_LOADED = true;
     E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; })
       .catch(function () { ADMIN_CFG = null; });
+    /* لقطة اليوم إن لم تُؤخذ — صامتة تماماً، لا تُعطّل الإقلاع ولا تُظهر خطأ */
+    E.ensureSnapshot(S.schema, who()).catch(function () { });
     var f = toArr(S.schema.tabs)[0];
     select(f ? f.id : "__admin");
   }).catch(function (e) {
@@ -4176,6 +5064,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 5.10 -->
+<!-- build 5.60 -->
 </body>
 </html>
