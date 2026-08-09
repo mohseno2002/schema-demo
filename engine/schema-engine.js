@@ -44,11 +44,47 @@ var SchemaEngine = (function () {
   }
   function stamp(o) { if (o && typeof o === "object") { o.updatedAt = Date.now(); o.src = CFG.appId; } return o; }
 
+  /* قراءة بوسم ETag — أساس النشر الذرّى (compare-and-swap على RTDB REST) */
+  function reqEtag(path) {
+    status("busy", "مزامنة…");
+    return fetch(CFG.base + "/" + path + ".json", { headers: { "X-Firebase-ETag": "true" } }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+      var tag = "";
+      try { tag = (r.headers && r.headers.get && (r.headers.get("ETag") || r.headers.get("etag"))) || ""; } catch (e2) { tag = ""; }
+      return r.json().then(function (j) { status("ok", "متصل بقاعدة الوزارة"); return { data: j, etag: tag }; });
+    }).catch(function (e) {
+      var h = hintOf(String(e.message));
+      status("err", "خطأ: " + e.message + (h ? " — " + h : ""));
+      throw e;
+    });
+  }
+  /* كتابة مشروطة بالـETag: 412 = البيانات اتغيّرت لحظة الحفظ — لا دهس.
+     بلا etag (خادم لا يعيده أو بيئة اختبار) تسقط لكتابة 5.80 العادية */
+  function reqIfMatch(path, body, etag) {
+    if (!etag) return req(path, "PUT", body);
+    status("busy", "مزامنة…");
+    return fetch(CFG.base + "/" + path + ".json", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "if-match": etag },
+      body: JSON.stringify(stamp(body))
+    }).then(function (r) {
+      if (r.status === 412) throw new Error("تعارض: المخطط اتعدّل لحظة النشر من مستخدم تانى — حدّث وأعد المحاولة");
+      if (!r.ok) throw new Error("HTTP " + r.status + " " + r.statusText);
+      return r.json();
+    }).then(function (j) { status("ok", "متصل بقاعدة الوزارة"); return j; }).catch(function (e) {
+      var h = hintOf(String(e.message));
+      status("err", "خطأ: " + e.message + (h ? " — " + h : ""));
+      throw e;
+    });
+  }
+
   var db = {
     get: function (p) { return req(p); },
     put: function (p, o) { return req(p, "PUT", stamp(o)); },
     patch: function (p, o) { return req(p, "PATCH", stamp(o)); },
     post: function (p, o) { return req(p, "POST", stamp(o)); },
+    getE: function (p) { return reqEtag(p); },
+    putIf: function (p, o, t) { return reqIfMatch(p, o, t); },
     del: function (p) { return req(p, "DELETE"); }
   };
 
@@ -353,9 +389,16 @@ var SchemaEngine = (function () {
     w = w || 640; h = h || 240;
     var pad = { t: 14, r: 12, b: 34, l: 46 };
     var iw = w - pad.l - pad.r, ih = h - pad.t - pad.b;
-    var max = 0;
-    series.forEach(function (d) { if (d.value > max) max = d.value; });
-    if (max <= 0) max = 1;
+    /* المدى يشمل الصفر دائماً ويتّسع للسالب — كان السالب يُرسم خارج اللوحة */
+    var max = 0, min = 0;
+    series.forEach(function (d) {
+      if (typeof d.value !== "number" || !isFinite(d.value)) return;
+      if (d.value > max) max = d.value;
+      if (d.value < min) min = d.value;
+    });
+    if (max === min) max = min + 1;
+    var span = max - min;
+    function Y(v) { return pad.t + ih * (max - v) / span; }
     var ns = "http://www.w3.org/2000/svg";
     var svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", "0 0 " + w + " " + h);
@@ -367,39 +410,47 @@ var SchemaEngine = (function () {
       return e;
     }
     for (var g = 0; g <= 4; g++) {
-      var y = pad.t + ih - (ih * g / 4);
+      var gv = min + span * g / 4, y = Y(gv);
       svg.appendChild(mk("line", { x1: pad.l, x2: w - pad.r, y1: y, y2: y, stroke: "#ded6c5", "stroke-width": 1 }));
       var tx = mk("text", { x: pad.l - 6, y: y + 4, "text-anchor": "end", "font-size": 9, fill: "#66736f" });
-      tx.textContent = fmt(max * g / 4);
+      tx.textContent = fmt(gv);
       svg.appendChild(tx);
+    }
+    if (min < 0) {
+      svg.appendChild(mk("line", { x1: pad.l, x2: w - pad.r, y1: Y(0), y2: Y(0), stroke: "#8b8577", "stroke-width": 1.4 }));
     }
     var n = series.length || 1, step = iw / n;
     if (kind === "line") {
       var d = "";
-      series.forEach(function (s, i) {
-        var x = pad.l + step * i + step / 2, y = pad.t + ih - (s.value / max) * ih;
-        d += (i === 0 ? "M" : "L") + x + " " + y + " ";
-        svg.appendChild(mk("circle", { cx: x, cy: y, r: 3, fill: "#155b75" }));
+      series.forEach(function (sd, i) {
+        var x = pad.l + step * i + step / 2, yv = Y(sd.value);
+        d += (i === 0 ? "M" : "L") + x + " " + yv + " ";
+        svg.appendChild(mk("circle", { cx: x, cy: yv, r: 3, fill: "#155b75" }));
       });
       svg.appendChild(mk("path", { d: d, fill: "none", stroke: "#247ba0", "stroke-width": 2 }));
     } else {
-      series.forEach(function (s, i) {
+      series.forEach(function (sd, i) {
         var bw = Math.max(6, step * 0.58);
         var x = pad.l + step * i + (step - bw) / 2;
-        var bh = (s.value / max) * ih;
-        svg.appendChild(mk("rect", { x: x, y: pad.t + ih - bh, width: bw, height: Math.max(1, bh), rx: 4, fill: "#247ba0" }));
+        var y0 = Y(0), yv = Y(sd.value);
+        svg.appendChild(mk("rect", { x: x, y: Math.min(y0, yv), width: bw, height: Math.max(1, Math.abs(y0 - yv)), rx: 4, fill: "#247ba0" }));
       });
     }
-    series.forEach(function (s, i) {
+    /* ترقيق التسميات عند كثرة التصنيفات — لا تكدّس فوق بعضها */
+    var maxLabels = Math.max(3, Math.floor(iw / 52));
+    var lstep = Math.ceil(n / maxLabels);
+    series.forEach(function (sd, i) {
+      if (i % lstep !== 0 && i !== n - 1) return;
       var t = mk("text", {
         x: pad.l + step * i + step / 2, y: h - 12, "text-anchor": "middle",
         "font-size": 9, fill: "#66736f"
       });
-      t.textContent = s.label.length > 10 ? s.label.slice(0, 9) + "…" : s.label;
+      t.textContent = sd.label.length > 10 ? sd.label.slice(0, 9) + "…" : sd.label;
       svg.appendChild(t);
     });
     return svg;
   }
+
 
 
   /* ---------------- العنصر الهيدروليكى: تعريف الحسابات ---------------- */
@@ -487,6 +538,47 @@ var SchemaEngine = (function () {
       var b = parseFloat(r[outField]); if (!isNaN(b)) outs.push({ Q: b });
     });
     return MWRIHyd.waterBalance(ins, outs, opts || {});
+  }
+
+  /* اتزان مجمّع: بمجموعة (ترعة) وفترة زمنية وبخر/رشح من الحقول —
+     دالة واحدة تستهلكها الشاشة والتقرير معاً حتى لا يفترق الرقمان */
+  function balanceCompute(rows, w) {
+    var tol = typeof w.tol === "number" ? w.tol : 5;
+    var use = rows, periodTxt = "";
+    if (w.dateField && w.periodDays) {
+      var cut = Date.now() - w.periodDays * 86400000;
+      use = rows.filter(function (r) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(r[w.dateField] || ""));
+        if (!m) return false;
+        return new Date(+m[1], +m[2] - 1, +m[3]).getTime() >= cut;
+      });
+      periodTxt = "آخر " + w.periodDays + " يوم — " + use.length + " من " + rows.length + " سجل";
+    }
+    function one(list) {
+      var ins = [], outs = [], seep = 0, evap = 0;
+      list.forEach(function (r) {
+        var a = parseFloat(r[w.inField]); if (!isNaN(a)) ins.push({ Q: a });
+        var b = parseFloat(r[w.outField]); if (!isNaN(b)) outs.push({ Q: b });
+        if (w.seepField) { var sv = parseFloat(r[w.seepField]); if (!isNaN(sv)) seep += sv; }
+        if (w.evapField) { var ev = parseFloat(r[w.evapField]); if (!isNaN(ev)) evap += ev; }
+      });
+      var wb = MWRIHyd.waterBalance(ins, outs, { tolerancePct: tol, seepage: seep, evaporation: evap });
+      var noBase = !(wb.inflow > 0);
+      wb.computable = !noBase;
+      wb.statusView = noBase ? ((wb.outflow > 0 || seep > 0 || evap > 0) ? "غير محسوبة — منصرف بلا وارد" : "لا بيانات") : wb.status;
+      return wb;
+    }
+    var out = { total: one(use), groups: null, period: periodTxt, count: use.length };
+    if (w.groupField) {
+      var keys = [], map = {};
+      use.forEach(function (r) {
+        var k = String(r[w.groupField] === undefined || r[w.groupField] === "" ? "—" : r[w.groupField]);
+        if (!map[k]) { map[k] = []; keys.push(k); }
+        map[k].push(r);
+      });
+      out.groups = keys.map(function (k) { var g2 = one(map[k]); g2.label = k; return g2; });
+    }
+    return out;
   }
 
   /* قيمة معامل: إما من حقل السجل أو ثابت من المخطط */
@@ -1488,7 +1580,8 @@ var SchemaEngine = (function () {
   var gate = {
     /* إعدادات البوابة مشتركة فى القاعدة: تُضبط من جهاز وتسرى على الجميع */
     load: function () {
-      return db.get(CFG.root + "/data/settings/admin").catch(function () { return null; });
+      /* فشل القراءة يصل للنداء كما هو — تفسيره «لا حماية» كان ثغرة فشل-مفتوح */
+      return db.get(CFG.root + "/data/settings/admin");
     },
     isSet: function (cfg) { return !!(cfg && cfg.hash && cfg.salt); },
     setPassword: function (pw) {
@@ -1798,7 +1891,11 @@ var SchemaEngine = (function () {
   /* ---------------- النشر والتأريخ ---------------- */
   function publish(state, action, who, done) {
     var old = state.schema;
-    return db.get(CFG.root + "/data/schema").then(function (live) {
+    var liveEtag = "";
+    /* القراءة بالـETag والكتابة النهائية مشروطة به: ناشران فى اللحظة نفسها لا يدهس
+       أحدهما الآخر — الثانى يستلم 412 برسالة صريحة بدل «آخر كتابة تكسب» */
+    return db.getE(CFG.root + "/data/schema").then(function (rd) {
+      var live = rd.data; liveEtag = rd.etag || "";
       if (live && old && live.version !== old.version) {
         throw new Error("تعارض: المخطط اتعدّل من مستخدم تانى — حدّث الأول");
       }
@@ -1817,7 +1914,7 @@ var SchemaEngine = (function () {
       var next = JSON.parse(JSON.stringify(old));
       next.version = (old.version || 0) + 1;
       next.at = Date.now(); next.by = who; next.action = action;
-      return db.put(CFG.root + "/data/schema", next).then(function () { state.schema = next; });
+      return db.putIf(CFG.root + "/data/schema", next, liveEtag).then(function () { state.schema = next; });
     }).then(function () {
       db.post(CFG.root + "/data/audit", { at: Date.now(), by: who, action: action }).catch(function () { });
       if (done) done(null, state.schema);
@@ -1851,7 +1948,7 @@ var SchemaEngine = (function () {
     BASEMAPS: BASEMAPS, gibsLayer: gibsLayer, ensureLeaflet: ensureLeaflet,
     buildKML: buildKML, downloadText: downloadText, earthUrl: earthUrl,
     WIDGETS: WIDGETS, publish: publish,
-    HYDRO: HYDRO, DESIGN: DESIGN, gate: gate, hydroValue: hydroValue, hydroBalance: hydroBalance,
+    HYDRO: HYDRO, DESIGN: DESIGN, gate: gate, hydroValue: hydroValue, hydroBalance: hydroBalance, balanceCompute: balanceCompute,
     TEMPLATES: TEMPLATES, WIZ_Q: WIZ_Q, wizSteps: wizSteps, wizardTab: wizardTab
   };
 })();

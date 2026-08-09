@@ -705,31 +705,66 @@ function hydroPanel(w, rows, t) {
     return p;
   }
 
-  /* اتزان مائى: نتيجة واحدة للتبويب كله */
+  /* اتزان مائى: إجمالى + تجميع اختيارى بمجموعة (ترعة) وفترة وبخر/رشح —
+     الحساب كله من E.balanceCompute، نفس الدالة التى يستهلكها التقرير */
   if (w.calc === "balance") {
-    var wb;
-    try { wb = E.hydroBalance(rows, w.inField, w.outField, { tolerancePct: w.tol || 5 }); }
+    var bc;
+    try { bc = E.balanceCompute(rows, w); }
     catch (e) { p.appendChild(el("div", { "class": "empty" }, ["تعذّر الحساب: " + e.message])); return p; }
-    /* النسبة بلا معنى إذا كان الوارد صفراً — لا تُعرض «مقبول» على منصرف بلا وارد */
-    var tol = w.tol || 5;
-    var noBase = !(wb.inflow > 0);
-    var okState = !noBase && Math.abs(wb.closurePct) <= tol;
+    var tot = bc.total, tol = typeof w.tol === "number" ? w.tol : 5;
+    var okState = tot.computable && Math.abs(tot.closurePct) <= tol;
     var g = el("div", { "class": "grid g4" });
-    g.appendChild(kpiCard("↓", "", "الوارد", fmt(wb.inflow), "م³/ث"));
-    g.appendChild(kpiCard("↑", "sand", "المنصرف", fmt(wb.outflow), "م³/ث"));
-    g.appendChild(kpiCard("Δ", okState ? "green" : "", "الفرق", fmt(wb.closure), "م³/ث"));
+    g.appendChild(kpiCard("↓", "", "الوارد", fmt(tot.inflow), "م³/ث"));
+    g.appendChild(kpiCard("↑", "sand", "المنصرف", fmt(tot.outflow), "م³/ث"));
+    g.appendChild(kpiCard("Δ", okState ? "green" : "", "الفرق", fmt(tot.closure), "م³/ث"));
     g.appendChild(kpiCard("%", okState ? "green" : "sand", "نسبة الإقفال",
-      noBase ? "—" : fmt(wb.closurePct), noBase ? "" : "%",
-      noBase ? "غير محسوبة" : (okState ? "داخل السماح" : "خارج السماح")));
+      tot.computable ? fmt(tot.closurePct) : "—", tot.computable ? "%" : "",
+      tot.computable ? (okState ? "داخل السماح" : "خارج السماح") : tot.statusView));
     p.appendChild(g);
-    if (noBase && wb.outflow > 0) {
+    if ((w.evapField || w.seepField) && (tot.evaporation > 0 || tot.seepage > 0)) {
+      var g2b = el("div", { "class": "grid g2" });
+      g2b.appendChild(kpiCard("☼", "sand", "البخر (من الحقول)", fmt(tot.evaporation), "م³/ث"));
+      g2b.appendChild(kpiCard("↧", "sand", "الرشح (من الحقول)", fmt(tot.seepage), "م³/ث"));
+      p.appendChild(g2b);
+    }
+    if (!tot.computable && (tot.outflow > 0 || tot.seepage > 0 || tot.evaporation > 0)) {
       p.appendChild(el("div", { "class": "errbox" }, [
         "• منصرف بلا وارد مسجَّل: النسبة غير قابلة للحساب، والحالة تحتاج مراجعة ميدانية — لا تُقرأ كإقفال مقبول."
       ]));
     }
+    if (bc.groups) {
+      var tbB = el("table"), hrB = el("tr");
+      var colsB = ["المجموعة", "الوارد", "المنصرف"];
+      if (w.evapField) colsB.push("البخر");
+      if (w.seepField) colsB.push("الرشح");
+      colsB.push("الفرق", "النسبة %", "الحالة");
+      colsB.forEach(function (hh) { hrB.appendChild(el("th", {}, [hh])); });
+      tbB.appendChild(el("thead", {}, [hrB]));
+      var bdB = el("tbody");
+      bc.groups.forEach(function (gr) {
+        var ok2 = gr.computable && Math.abs(gr.closurePct) <= tol;
+        var trB = el("tr");
+        trB.appendChild(el("td", {}, [gr.label]));
+        trB.appendChild(el("td", {}, [fmt(gr.inflow)]));
+        trB.appendChild(el("td", {}, [fmt(gr.outflow)]));
+        if (w.evapField) trB.appendChild(el("td", {}, [fmt(gr.evaporation)]));
+        if (w.seepField) trB.appendChild(el("td", {}, [fmt(gr.seepage)]));
+        trB.appendChild(el("td", {}, [fmt(gr.closure)]));
+        trB.appendChild(el("td", {}, [gr.computable ? fmt(gr.closurePct) : "ــــ"]));
+        var stB = el("td");
+        stB.appendChild(el("span", { "class": "pill " + (gr.computable ? (ok2 ? "green" : "danger") : "sand") },
+          [gr.computable ? (ok2 ? "داخل السماح" : gr.status) : gr.statusView]));
+        trB.appendChild(stB);
+        bdB.appendChild(trB);
+      });
+      tbB.appendChild(bdB);
+      p.appendChild(el("div", { "class": "tbl-wrap" }, [tbB]));
+    }
     p.appendChild(el("div", { "class": "hint" }, [
-      "مصدر الحساب: MWRIHyd.waterBalance — سماح " + tol + "%. الحالة تُحسب هنا من نسبة الإقفال مقابل السماح. "
-      + "لا يشمل البخر والرشح ما لم تُدخَلا كحقول."
+      (bc.period ? "الفترة: " + bc.period + " · " : "")
+      + "مصدر الحساب: MWRIHyd.waterBalance — سماح " + tol + "%. الحالة تُحسب من نسبة الإقفال مقابل السماح"
+      + (w.groupField ? "، لكل مجموعة على حدة ثم الإجمالى" : "")
+      + ". " + ((w.evapField || w.seepField) ? "البخر والرشح من الحقول المُدخَلة." : "لا يشمل البخر والرشح ما لم تُدخَلا كحقول.")
     ]));
     return p;
   }
@@ -870,17 +905,30 @@ function tabReportBody(t, rows) {
     if (w.type !== "hydro" || typeof MWRIHyd === "undefined") return;
     if (w.calc === "balance") {
       try {
-        var wb = E.hydroBalance(rows, w.inField, w.outField, { tolerancePct: w.tol || 5 });
-        /* وارد صفر ومنصرف موجب: النواة تعيد «مقبول» و٠٪ — الشاشة عولجت فى 5.70
-           والتقرير المطبوع كان ما زال يكتبها كما هى. الحالة هنا تُحسب كالشاشة تماماً */
-        var noBase2 = !(wb.inflow > 0);
+        /* نفس دالة الشاشة E.balanceCompute — لا يفترق رقم التقرير عن رقم الشاشة */
+        var bcR = E.balanceCompute(rows, w);
+        var tolR = typeof w.tol === "number" ? w.tol : 5;
         box.appendChild(repSection(w.label || "الاتزان المائى"));
-        box.appendChild(repTable(["الوارد (م³/ث)", "المنصرف (م³/ث)", "الفرق (م³/ث)", "نسبة الإقفال %", "الحالة"],
-          [[fmt(wb.inflow), fmt(wb.outflow), fmt(wb.closure),
-            noBase2 ? "ــــ" : fmt(wb.closurePct),
-            noBase2 ? "غير محسوبة — منصرف بلا وارد" : wb.status]]));
-        box.appendChild(el("p", { "class": "rep-note" }, ["المنهجية: MWRIHyd.waterBalance — سماح " + (w.tol || 5) + "%. لا يشمل البخر والرشح ما لم يُدخَلا كحقول."
-          + (noBase2 && wb.outflow > 0 ? " تنبيه: الوارد المسجَّل صفر — النسبة غير قابلة للحساب والحالة تحتاج مراجعة ميدانية." : "")]));
+        var hdR = ["البيان", "الوارد (م³/ث)", "المنصرف (م³/ث)"];
+        if (w.evapField) hdR.push("البخر");
+        if (w.seepField) hdR.push("الرشح");
+        hdR.push("الفرق (م³/ث)", "نسبة الإقفال %", "الحالة");
+        var linesR = [];
+        function bLine(nm, b2) {
+          var row = [nm, fmt(b2.inflow), fmt(b2.outflow)];
+          if (w.evapField) row.push(fmt(b2.evaporation));
+          if (w.seepField) row.push(fmt(b2.seepage));
+          row.push(fmt(b2.closure), b2.computable ? fmt(b2.closurePct) : "ــــ",
+            b2.computable ? b2.status : b2.statusView);
+          return row;
+        }
+        (bcR.groups || []).forEach(function (gr) { linesR.push(bLine(gr.label, gr)); });
+        linesR.push(bLine(bcR.groups ? "الإجمالى" : "الكل", bcR.total));
+        box.appendChild(repTable(hdR, linesR));
+        box.appendChild(el("p", { "class": "rep-note" }, ["المنهجية: MWRIHyd.waterBalance — سماح " + tolR + "%"
+          + (bcR.period ? " · الفترة: " + bcR.period : "")
+          + ((w.evapField || w.seepField) ? " · البخر والرشح من الحقول المُدخَلة." : " · لا يشمل البخر والرشح ما لم يُدخَلا كحقول.")
+          + (!bcR.total.computable && (bcR.total.outflow > 0 || bcR.total.seepage > 0 || bcR.total.evaporation > 0) ? " تنبيه: الوارد المسجَّل صفر — النسبة غير قابلة للحساب والحالة تحتاج مراجعة ميدانية." : "")]));
       } catch (e) { }
       return;
     }
@@ -1542,17 +1590,19 @@ var REF_ROWS = {};    /* سجلات التبويبات المرجعية للنم
    يُستدعى قبل كل إجراء مقيَّد (الرجوع لنسخة · حذف السجلات). */
 /* حتى تكتمل قراءة إعدادات الصلاحيات لا يُعتبر أحد مسؤولاً — الفشل مغلقاً لا مفتوحاً */
 var ADMIN_READY = false;
+var ADMIN_ERR = false, ADMIN_ERR_MSG = ""; /* فشلت قراءة الإعدادات — يفشل الحارس مغلقاً */
 function isAdmin() {
-  if (!ADMIN_READY) return false;
+  if (!ADMIN_READY || ADMIN_ERR) return false;
   return !E.gate.isSet(ADMIN_CFG) || E.gate.isUnlocked();
 }
 function ensureAdminCfg(cb) {
   if (ADMIN_READY || ADMIN_LOADED) { cb(); return; }
   ADMIN_LOADED = true;
   E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; cb(); })
-    .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; cb(); });
+    .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; ADMIN_ERR = true; cb(); });
 }
 function denyMsg() {
+  if (ADMIN_ERR) { toast("تعذّر التحقق من الصلاحيات (فشلت قراءة الإعدادات) — افتح شاشة الإدارة واضغط «إعادة المحاولة»", true); return; }
   toast("الإجراء ده مقصور على المسؤول — افتح شاشة الإدارة بكلمة السر", true);
 }
 function wizardPanel() {
@@ -1742,7 +1792,7 @@ function gateAdminPanel() {
         E.gate.unlock(12);
         toast(isSet ? "اتغيّرت كلمة السر" : "اتفعّلت الحماية — الإضافة والحذف بقت مقصورة عليك");
         audit(isSet ? "تغيير كلمة سر الإدارة" : "تفعيل حماية شاشة الإدارة");
-        return E.gate.load().then(function (c) { ADMIN_CFG = c; renderAdmin(); });
+        return E.gate.load().then(function (c) { ADMIN_CFG = c; renderAdmin(); }).catch(function (e2) { toast("اتحفظت الحماية — لكن تعذّرت إعادة قراءة الإعدادات: " + e2.message, true); });
       }).catch(function (e) { setBtn.textContent = isSet ? "تغيير كلمة السر" : "تفعيل الحماية"; toast(e.message, true); });
     });
   };
@@ -1780,9 +1830,19 @@ function renderAdmin() {
     c.appendChild(el("div", { "class": "empty" }, ["جارٍ قراءة إعدادات الصلاحيات…"]));
     if (!ADMIN_LOADED) {
       ADMIN_LOADED = true;
-      E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; renderAdmin(); })
-        .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; renderAdmin(); });
+      E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; ADMIN_ERR = false; renderAdmin(); })
+        .catch(function (e) { ADMIN_CFG = null; ADMIN_READY = true; ADMIN_ERR = true; ADMIN_ERR_MSG = e && e.message ? e.message : "تعذّر الاتصال"; renderAdmin(); });
     }
+    return;
+  }
+  /* تعذّرت قراءة الإعدادات: الفشل مغلقاً — لا أدوات بنية بلا تحقق، مع زر إعادة محاولة */
+  if (ADMIN_ERR) {
+    var epE = panel("تعذّر التحقق من الصلاحيات", "إعدادات البوابة لم تُقرأ");
+    epE.appendChild(el("div", { "class": "hint" }, ["نص الخطأ: " + (ADMIN_ERR_MSG || "غير معروف") + " — أدوات البنية والرجوع لنسخة وحذف السجلات موقوفة لحين التحقق."]));
+    var rbE = el("button", { "class": "btn solid" }, ["إعادة المحاولة"]);
+    rbE.onclick = function () { ADMIN_LOADED = false; ADMIN_READY = false; ADMIN_ERR = false; renderAdmin(); };
+    epE.appendChild(el("div", { "class": "actions" }, [rbE]));
+    c.appendChild(epE);
     return;
   }
   /* البوابة مفعّلة والجلسة مقفولة: لا تُعرض أدوات البنية إطلاقاً */
@@ -2237,11 +2297,30 @@ function tabEditor(t) {
       hydBox.appendChild(el("h3", {}, ["حقول الاتزان"]));
       var fin = fieldSelect(false), fout = fieldSelect(false), ftol = el("input", { type: "number", step: "any", value: "5" });
       hydMapInputs.__in = fin; hydMapInputs.__out = fout; hydMapInputs.__tol = ftol;
+      /* 5.90: تجميع اختيارى بمجموعة وفترة زمنية وبخر/رشح من الحقول */
+      function selBy(pred, emptyLabel) {
+        var s2 = el("select");
+        s2.appendChild(el("option", { value: "" }, [emptyLabel]));
+        toArr(t.fields).forEach(function (f2) { if (pred(f2)) s2.appendChild(el("option", { value: f2.id }, [f2.label])); });
+        return s2;
+      }
+      var fgrp = selBy(function (f2) { return f2.type === "text" || f2.type === "select" || f2.type === "ref"; }, "— بلا تجميع —");
+      var fdate = selBy(function (f2) { return f2.type === "date"; }, "— كل الفترات —");
+      var fdays = el("input", { type: "number", step: "1", placeholder: "كل السجلات" });
+      var fev = selBy(function (f2) { return f2.type === "number"; }, "— بدون —");
+      var fsp = selBy(function (f2) { return f2.type === "number"; }, "— بدون —");
+      hydMapInputs.__grp = fgrp; hydMapInputs.__date = fdate; hydMapInputs.__days = fdays; hydMapInputs.__evap = fev; hydMapInputs.__seep = fsp;
       hydBox.appendChild(el("div", { "class": "frm" }, [
         el("div", { "class": "fld" }, [el("label", {}, ["حقل الوارد"]), fin]),
         el("div", { "class": "fld" }, [el("label", {}, ["حقل المنصرف"]), fout]),
-        el("div", { "class": "fld" }, [el("label", {}, ["سماح الإقفال %"]), ftol])
+        el("div", { "class": "fld" }, [el("label", {}, ["سماح الإقفال %"]), ftol]),
+        el("div", { "class": "fld" }, [el("label", {}, ["التجميع بمجموعة (ترعة مثلاً)"]), fgrp]),
+        el("div", { "class": "fld" }, [el("label", {}, ["حقل التاريخ للفترة"]), fdate]),
+        el("div", { "class": "fld" }, [el("label", {}, ["المدة بالأيام (مع حقل التاريخ)"]), fdays]),
+        el("div", { "class": "fld" }, [el("label", {}, ["حقل البخر (اختيارى)"]), fev]),
+        el("div", { "class": "fld" }, [el("label", {}, ["حقل الرشح (اختيارى)"]), fsp])
       ]));
+      hydBox.appendChild(el("div", { "class": "hint" }, ["بالتجميع يظهر جدول اتزان لكل مجموعة + الإجمالى، وبالفترة تُحسب آخر س يوم فقط — والحساب نفسه فى الشاشة والتقرير."]));
       return;
     }
     var def = E.HYDRO[wcalc.value];
@@ -2346,6 +2425,15 @@ function tabEditor(t) {
         w.outField = hydMapInputs.__out.value;
         w.tol = parseFloat(hydMapInputs.__tol.value) || 5;
         if (!w.inField || !w.outField) { toast("اختر حقلَى الوارد والمنصرف", true); return; }
+        /* 5.90: خصائص التجميع والفترة والبخر/الرشح — اختيارية كلها */
+        if (hydMapInputs.__grp && hydMapInputs.__grp.value) w.groupField = hydMapInputs.__grp.value;
+        if (hydMapInputs.__date && hydMapInputs.__date.value) {
+          w.dateField = hydMapInputs.__date.value;
+          var pdB = parseInt(hydMapInputs.__days && hydMapInputs.__days.value, 10);
+          if (pdB > 0) w.periodDays = pdB;
+        }
+        if (hydMapInputs.__evap && hydMapInputs.__evap.value) w.evapField = hydMapInputs.__evap.value;
+        if (hydMapInputs.__seep && hydMapInputs.__seep.value) w.seepField = hydMapInputs.__seep.value;
       } else {
         var def2 = E.HYDRO[w.calc], bad = "";
         w.map = {};
@@ -2511,8 +2599,8 @@ function boot(seed) {
     buildNav();
     /* تُقرأ إعدادات الصلاحيات مبكراً حتى تسرى القيود على كل الشاشات لا على الإدارة وحدها */
     ADMIN_LOADED = true;
-    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; select(CUR); })
-      .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; select(CUR); });
+    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; ADMIN_ERR = false; select(CUR); })
+      .catch(function (e) { ADMIN_CFG = null; ADMIN_READY = true; ADMIN_ERR = true; ADMIN_ERR_MSG = e && e.message ? e.message : "تعذّر الاتصال"; select(CUR); });
     /* لقطة اليوم إن لم تُؤخذ — صامتة تماماً، لا تُعطّل الإقلاع ولا تُظهر خطأ */
     E.ensureSnapshot(S.schema, who()).catch(function () { });
     var f = toArr(S.schema.tabs)[0];
