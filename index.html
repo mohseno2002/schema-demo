@@ -2422,7 +2422,9 @@ var SchemaEngine = (function () {
           if (peek() && peek().k === "id") { arg = t[p].v; p++; }
           eat(")");
           if (!RULE_FUNCS[name]) throw new Error("دالة غير معروفة: " + name);
-          if (name === "today") return Math.floor(Date.now() / 86400000);
+          /* يوم محلى لا UTC: قبل الإصلاح كان إنذار «متأخر عن today()» يتأخر
+             حتى ٣ فجراً بتوقيت مصر لأن فهرس اليوم كان يُحسب بتوقيت جرينتش */
+          if (name === "today") return Math.floor((Date.now() - new Date().getTimezoneOffset() * 60000) / 86400000);
           if (name === "empty") return fieldVal(arg) === null;
           if (name === "filled") return fieldVal(arg) !== null;
           if (name === "days") { var dv = fieldVal(arg); return dv === null ? null : dv; }
@@ -2927,8 +2929,6 @@ function entityPanel(w) {
       var tr = el("tr");
       flds.forEach(function (f) { tr.appendChild(el("td", {}, [(r[f.id] === undefined || r[f.id] === "") ? "—" : String(r[f.id])])); });
       bd.appendChild(tr);
-      var la = parseFloat(r.lat), ln = parseFloat(r.lng);
-      if (!isNaN(la) && !isNaN(ln)) pts.push({ la: la, ln: ln, n: sc.tab.title });
     });
     sc.rows.forEach(function (r) {
       var la = parseFloat(r.lat), ln = parseFloat(r.lng);
@@ -3452,10 +3452,16 @@ function tabReportBody(t, rows) {
     if (w.calc === "balance") {
       try {
         var wb = E.hydroBalance(rows, w.inField, w.outField, { tolerancePct: w.tol || 5 });
+        /* وارد صفر ومنصرف موجب: النواة تعيد «مقبول» و٠٪ — الشاشة عولجت فى 5.70
+           والتقرير المطبوع كان ما زال يكتبها كما هى. الحالة هنا تُحسب كالشاشة تماماً */
+        var noBase2 = !(wb.inflow > 0);
         box.appendChild(repSection(w.label || "الاتزان المائى"));
         box.appendChild(repTable(["الوارد (م³/ث)", "المنصرف (م³/ث)", "الفرق (م³/ث)", "نسبة الإقفال %", "الحالة"],
-          [[fmt(wb.inflow), fmt(wb.outflow), fmt(wb.closure), fmt(wb.closurePct), wb.status]]));
-        box.appendChild(el("p", { "class": "rep-note" }, ["المنهجية: MWRIHyd.waterBalance — سماح " + (w.tol || 5) + "%. لا يشمل البخر والرشح ما لم يُدخَلا كحقول."]));
+          [[fmt(wb.inflow), fmt(wb.outflow), fmt(wb.closure),
+            noBase2 ? "ــــ" : fmt(wb.closurePct),
+            noBase2 ? "غير محسوبة — منصرف بلا وارد" : wb.status]]));
+        box.appendChild(el("p", { "class": "rep-note" }, ["المنهجية: MWRIHyd.waterBalance — سماح " + (w.tol || 5) + "%. لا يشمل البخر والرشح ما لم يُدخَلا كحقول."
+          + (noBase2 && wb.outflow > 0 ? " تنبيه: الوارد المسجَّل صفر — النسبة غير قابلة للحساب والحالة تحتاج مراجعة ميدانية." : "")]));
       } catch (e) { }
       return;
     }
@@ -3602,9 +3608,8 @@ function renderTab(t) {
     if (myToken !== LOAD_TOKEN) return;
     c.innerHTML = "";
     var p = panel("تعذّر التحميل", "مصدر البيانات لم يستجب");
-    p.appendChild(el("div", { "class": "hint" }, ["نص الخطأ: " + e.message]));
+    p.appendChild(el("div", { "class": "hint" }, ["نص الخطأ: " + e.message + " — الإدخال موقوف لحد رجوع الاتصال، جرّب زر «تحديث»."]));
     c.appendChild(p);
-    drawForm(t, c);
   });
 }
 
@@ -3771,7 +3776,7 @@ function drawTab(t, rows, offline) {
         if (FILTER.trim()) counter.textContent = "مطابق: " + rowsView.length + " من " + rows.length;
         var exp = el("button", { "class": "btn mini" }, ["تصدير CSV"]);
         exp.onclick = function () {
-          var out = fields.map(function (f) { return f.label; }).join(",") + "\n";
+          var out = fields.map(function (f) { return "\u0022" + String(f.label).replace(/"/g, "\u0022\u0022") + "\u0022"; }).join(",") + "\n";
           rowsView.forEach(function (r) {
             out += fields.map(function (f) { return "\u0022" + String(r[f.id] === undefined ? "" : r[f.id]).replace(/"/g, "\u0022\u0022") + "\u0022"; }).join(",") + "\n";
           });
@@ -3836,7 +3841,15 @@ function startEdit(t, r) {
     var val = (v === undefined || v === null) ? "" : String(v);
     var inp = FORM.inputs[f.id];
     if (inp.getAttribute && inp.getAttribute("data-loading")) inp.setAttribute("data-want", val);
-    else inp.value = val;
+    else {
+      inp.value = val;
+      /* قيمة محفوظة لم تعد ضمن الخيارات (اتشالت من القائمة أو من التبويب المصدر):
+         تُضاف كخيار بدل أن تضيع بصمت ويُكتب مكانها أول خيار عند الحفظ */
+      if (inp.tagName === "SELECT" && val !== "" && inp.value !== val) {
+        inp.appendChild(el("option", { value: val }, [val + " (قيمة محفوظة)"]));
+        inp.value = val;
+      }
+    }
   });
   FORM.title.textContent = "تعديل سجل قائم";
   FORM.save.textContent = "حفظ التعديل";
@@ -3888,7 +3901,14 @@ function drawForm(t, c, offline) {
             });
             sel.removeAttribute("data-loading");
             var want = sel.getAttribute("data-want");
-            if (want) { sel.value = want; sel.removeAttribute("data-want"); }
+            if (want) {
+              sel.value = want;
+              if (sel.value !== want) {
+                sel.appendChild(el("option", { value: want }, [want + " (قيمة محفوظة)"]));
+                sel.value = want;
+              }
+              sel.removeAttribute("data-want");
+            }
             if (!added) {
               sel.appendChild(el("option", { value: "" }, ["(لا سجلات فى " + tgt.title + " بعد)"]));
             }
@@ -4110,8 +4130,8 @@ function isAdmin() {
 function ensureAdminCfg(cb) {
   if (ADMIN_READY || ADMIN_LOADED) { cb(); return; }
   ADMIN_LOADED = true;
-  E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; cb(); })
-    .catch(function () { ADMIN_CFG = null; cb(); });
+  E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; cb(); })
+    .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; cb(); });
 }
 function denyMsg() {
   toast("الإجراء ده مقصور على المسؤول — افتح شاشة الإدارة بكلمة السر", true);
@@ -4335,11 +4355,15 @@ function gateAdminPanel() {
 function renderAdmin() {
   var c = document.getElementById("content"); c.innerHTML = "";
 
-  if (ADMIN_CFG === null && !ADMIN_LOADED) {
+  /* الفشل مغلقاً: قبل اكتمال قراءة الإعدادات لا تُعرض أدوات البنية —
+     كانت الشاشة تنفتح كاملة لثانية لو فُتحت قبل وصول الإعدادات من القاعدة */
+  if (!ADMIN_READY) {
     c.appendChild(el("div", { "class": "empty" }, ["جارٍ قراءة إعدادات الصلاحيات…"]));
-    ADMIN_LOADED = true;
-    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; renderAdmin(); })
-      .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; renderAdmin(); });
+    if (!ADMIN_LOADED) {
+      ADMIN_LOADED = true;
+      E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; renderAdmin(); })
+        .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; renderAdmin(); });
+    }
     return;
   }
   /* البوابة مفعّلة والجلسة مقفولة: لا تُعرض أدوات البنية إطلاقاً */
@@ -4696,7 +4720,7 @@ function tabEditor(t) {
         : (w.type === "xkpi" || w.type === "xchart" ? ("من: " + ((ALL[w.tabId] || {}).title || w.tabId))
         : (w.type === "hydro" ? (w.calc === "balance" ? ("اتزان: " + w.inField + " ↔ " + w.outField) : ((E.HYDRO[w.calc] || { name: w.calc }).name))
         : (w.type === "chart" ? (w.labelField + " → " + w.valueField)
-        : (w.type === "map" ? (w.latField + "/" + w.lngField) : ((w.agg || "") + " " + (w.field || ")")))))))));
+        : (w.type === "map" ? (w.latField + "/" + w.lngField) : ((w.agg || "") + " " + (w.field || "")))))))));
     box.appendChild(el("div", { "class": "adm-row" }, [
       el("span", { "class": "pill sand" }, [(E.WIDGETS[w.type] || { name: w.type }).name]),
       el("span", { "class": "t" }, [w.label || "—"]),
@@ -4852,6 +4876,16 @@ function tabEditor(t) {
     if (w.type === "formula") {
       w.expr = we.value.trim();
       try { E.evalExpr(w.expr, []); } catch (e) { toast("المعادلة غير صحيحة: " + e.message, true); return; }
+      /* كقواعد الإنذار: معادلة بحقل غير موجود كانت تُحفظ وتعطى صفراً للأبد */
+      var knownF = toArr(t.fields).map(function (f) { return f.id; });
+      var toksF = E.tokenize(w.expr), badF = [];
+      for (var i2 = 0; i2 < toksF.length; i2++) {
+        if (toksF[i2].k === "id" && toksF[i2 + 1] && toksF[i2 + 1].k === "(") {
+          var argF = toksF[i2 + 2];
+          if (argF && argF.k === "id" && knownF.indexOf(argF.v) < 0 && badF.indexOf(argF.v) < 0) badF.push(argF.v);
+        }
+      }
+      if (badF.length) { toast("حقول غير موجودة فى المعادلة: " + badF.join(" · "), true); return; }
     }
     if (w.type === "chart") { w.labelField = wlab.value; w.valueField = wval.value; w.chartType = wct.value; w.agg = wa.value; }
     if (w.type === "map") { w.latField = wlat.value; w.lngField = wlng.value; w.labelField = wnm.value; w.base = wbase.value; }
@@ -5059,7 +5093,7 @@ function boot(seed) {
     /* تُقرأ إعدادات الصلاحيات مبكراً حتى تسرى القيود على كل الشاشات لا على الإدارة وحدها */
     ADMIN_LOADED = true;
     E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; select(CUR); })
-      .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; });
+      .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; select(CUR); });
     /* لقطة اليوم إن لم تُؤخذ — صامتة تماماً، لا تُعطّل الإقلاع ولا تُظهر خطأ */
     E.ensureSnapshot(S.schema, who()).catch(function () { });
     var f = toArr(S.schema.tabs)[0];
@@ -5115,6 +5149,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 5.70 -->
+<!-- build 5.80 -->
 </body>
 </html>
