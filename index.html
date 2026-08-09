@@ -1168,7 +1168,7 @@ var SchemaEngine = (function () {
     },
     gate: {
       name: "تصرف بوابة",
-      params: [["b", "عرض البوابة (م)"], ["a", "فتحة البوابة (م)"], ["y1", "منسوب أمام (م)"], ["y3", "منسوب خلف (م)"]],
+      params: [["b", "عرض البوابة (م)"], ["a", "فتحة البوابة (م)"], ["y1", "عمق الماء أمام البوابة فوق العتب (م)"], ["y3", "عمق الماء خلفها فوق العتب (م)"]],
       run: function (v) {
         var g = MWRIHyd.gateFlow({ b: v.b, a: v.a, y1: v.y1, y3: v.y3 });
         return {
@@ -2019,8 +2019,9 @@ var SchemaEngine = (function () {
     canalSection: {
       name: "تصميم قطاع مجرى (ترعة/مصرف)",
       note: "يحسب العمق الطبيعى للتصرف المطلوب ويتحقق من السرعة والحالة، ويقترح البؤبؤ (freeboard) بقاعدة ٣٠٪ من العمق بحد أدنى ٣٠ سم.",
-      inputs: [["Q", "التصرف التصميمى", "م³/ث"], ["b", "عرض القاع", "م"], ["z", "ميل الجوانب z:1", ""],
-               ["n", "معامل الخشونة", ""], ["S", "ميل القاع", ""]],
+      inputs: [["Q", "التصرف التصميمى", "م³/ث", { min: 0.0001 }], ["b", "عرض القاع", "م", { min: 0.01 }],
+               ["z", "ميل الجوانب z:1", "", { min: 0 }], ["n", "معامل الخشونة", "", { min: 0.008, max: 0.2 }],
+               ["S", "ميل القاع", "", { min: 0.000001, max: 0.5 }]],
       run: function (v) {
         var y = MWRIHyd.normalDepth(v.Q, v.b, v.z, v.n, v.S);
         var sec = MWRIHyd.trapSection(v.b, y, v.z);
@@ -2041,10 +2042,10 @@ var SchemaEngine = (function () {
       }
     },
     culvertPipe: {
-      name: "تصميم مواسير / عبارة دائرية",
-      note: "يوزّع التصرف على عدد الخطوط ثم يبحث عن القطر الذى يمرّر النصيب عند نسبة ملء ٠٫٨ من القطر بمانينج. القطر الناتج نظرى — يُقرّب لأقرب مقاس تجارى.",
-      inputs: [["Q", "التصرف التصميمى", "م³/ث"], ["lines", "عدد الخطوط", ""],
-               ["n", "معامل الخشونة", ""], ["S", "الميل الطولى", ""]],
+      name: "تقدير أولى: مواسير / عبارة دائرية",
+      note: "تقدير أولى بمانينج عند نسبة ملء ٠٫٨D. لا يشمل تحكّم المدخل أو المخرج، ولا فواقد الدخول والخروج، ولا الغمر — فلا يصلح وحده لاعتماد تنفيذى.",
+      inputs: [["Q", "التصرف التصميمى", "م³/ث", { min: 0.0001 }], ["lines", "عدد الخطوط", "", { min: 1, int: true }],
+               ["n", "معامل الخشونة", "", { min: 0.008, max: 0.2 }], ["S", "الميل الطولى", "", { min: 0.000001, max: 0.5 }]],
       run: function (v) {
         var q = v.Q / Math.max(1, v.lines);
         /* قطاع دائرى بنسبة ملء 0.8D: A و R بدلالة D بصيغة القطاع الدائرى الجزئى */
@@ -2073,11 +2074,12 @@ var SchemaEngine = (function () {
       }
     },
     boxCulvert: {
-      name: "تصميم عبارة صندوقية / تغطية خرسانية",
-      note: "يحسب ارتفاع الفتحة الصافى لتمرير التصرف عند نسبة ملء ٠٫٨ من الارتفاع بمانينج لقطاع مستطيل، ويضيف كميات الخرسانة بسُمك جدار مُدخَل.",
-      inputs: [["Q", "التصرف التصميمى", "م³/ث"], ["b", "عرض الفتحة الصافى", "م"],
-               ["cells", "عدد الفتحات", ""], ["n", "معامل الخشونة", ""], ["S", "الميل الطولى", ""],
-               ["t", "سُمك الجدران والبلاطات", "م"], ["L", "طول العبارة", "م"]],
+      name: "تقدير أولى: عبارة صندوقية / تغطية",
+      note: "تقدير أولى: ارتفاع صافٍ بمانينج عند ملء ٠٫٨ وكميات خرسانة هندسية. لا يشمل تحكّم المدخل/المخرج ولا الفواقد ولا الغمر ولا أى حساب إنشائى.",
+      inputs: [["Q", "التصرف التصميمى", "م³/ث", { min: 0.0001 }], ["b", "عرض الفتحة الصافى", "م", { min: 0.1 }],
+               ["cells", "عدد الفتحات", "", { min: 1, int: true }], ["n", "معامل الخشونة", "", { min: 0.008, max: 0.2 }],
+               ["S", "الميل الطولى", "", { min: 0.000001, max: 0.5 }],
+               ["t", "سُمك الجدران والبلاطات", "م", { min: 0.05 }], ["L", "طول العبارة", "م", { min: 0.5 }]],
       run: function (v) {
         var q = v.Q / Math.max(1, v.cells);
         var f = function (h) {
@@ -2101,8 +2103,9 @@ var SchemaEngine = (function () {
     },
     gateSize: {
       name: "تحديد فتحة بوابة لتصرف مستهدف",
-      note: "يحلّ معادلة البوابة عكسياً بمعامل انكماش ٠٫٦١ (تقريب هندسى لا معايرة حقلية). قبل الاعتماد على الرقم للتشغيل، عايره بقياس فعلى.",
-      inputs: [["Q", "التصرف المستهدف", "م³/ث"], ["b", "عرض البوابة", "م"], ["y1", "المنسوب أمام البوابة", "م"]],
+      note: "حلّ عكسى لمعادلة البوابة بمعامل انكماش ٠٫٦١. المدخل عمق الماء فوق عتب البوابة لا منسوب مطلق. تصنيف الجريان الحر/المغمور فى النواة مبسّط — عايره بقياس فعلى قبل الاعتماد التشغيلى.",
+      inputs: [["Q", "التصرف المستهدف", "م³/ث", { min: 0.0001 }], ["b", "عرض البوابة", "م", { min: 0.05 }],
+               ["y1", "عمق الماء أمام البوابة فوق العتب", "م", { min: 0.01 }]],
       run: function (v) {
         var a = MWRIHyd.gateOpeningFor(v.Q, v.b, v.y1, 0.61);
         var chk = MWRIHyd.gateFlow({ b: v.b, a: a, y1: v.y1 });
@@ -2116,7 +2119,8 @@ var SchemaEngine = (function () {
     weirSize: {
       name: "تحديد طول هدار لحمل معين",
       note: "هدار حاد القمة بمعادلة Rehbock. للهدار عريض القمة استخدم النواة مباشرة بمعامل ٠٫٨٥.",
-      inputs: [["Q", "التصرف التصميمى", "م³/ث"], ["H", "الحمل فوق القمة", "م"], ["P", "ارتفاع القمة", "م"]],
+      inputs: [["Q", "التصرف التصميمى", "م³/ث", { min: 0.0001 }], ["H", "الحمل فوق القمة", "م", { min: 0.01 }],
+               ["P", "ارتفاع القمة", "م", { min: 0.01 }]],
       run: function (v) {
         var q1 = MWRIHyd.sharpCrestedWeir(1, v.H, v.P);     /* التصرف لكل متر طول */
         var L = v.Q / q1;
@@ -2132,8 +2136,9 @@ var SchemaEngine = (function () {
     lining: {
       name: "تبطين / تكسية دبش — الكميات وفحص السرعة",
       note: "يحسب المساحة المبلّلة والكميات من الهندسة. سُمك التكسية بقاعدة ميدانية شائعة (٢٠–٣٠ سم للسرعات حتى ٢ م/ث) وليست معياراً مقنّناً — راجعها مع الاشتراطات المعتمدة.",
-      inputs: [["b", "عرض القاع", "م"], ["y", "عمق الماء", "م"], ["z", "ميل الجوانب z:1", ""],
-               ["L", "طول القطاع", "م"], ["t", "سُمك التبطين", "م"], ["n", "الخشونة بعد التبطين", ""], ["S", "ميل القاع", ""]],
+      inputs: [["b", "عرض القاع", "م", { min: 0.01 }], ["y", "عمق الماء", "م", { min: 0.01 }], ["z", "ميل الجوانب z:1", "", { min: 0 }],
+               ["L", "طول القطاع", "م", { min: 0.5 }], ["t", "سُمك التبطين", "م", { min: 0.01 }],
+               ["n", "الخشونة بعد التبطين", "", { min: 0.008, max: 0.2 }], ["S", "ميل القاع", "", { min: 0.000001, max: 0.5 }]],
       run: function (v) {
         var sec = MWRIHyd.trapSection(v.b, v.y, v.z);
         var V = MWRIHyd.manningV(v.n, sec.R, v.S);
@@ -2149,10 +2154,11 @@ var SchemaEngine = (function () {
       }
     },
     bridgeOpening: {
-      name: "الفتحة المائية لكوبرى",
-      note: "يحسب المساحة المائية اللازمة من التصرف والسرعة المسموحة ويوزّعها على البحور. الارتفاع فوق سطح الماء (clearance) قيمة إدارية تُدخلها أنت. الحساب الإنشائى للكوبرى خارج النطاق.",
-      inputs: [["Q", "التصرف التصميمى", "م³/ث"], ["Vall", "السرعة المسموحة أسفل الكوبرى", "م/ث"],
-               ["spans", "عدد البحور", ""], ["y", "عمق الماء التصميمى", "م"], ["clr", "الارتفاع فوق سطح الماء", "م"]],
+      name: "تقدير أولى: الفتحة المائية لكوبرى",
+      note: "تقدير أولى: مساحة مائية = Q/V موزّعة على البحور. لا يشمل الارتداد (afflux) ولا أثر الأعمدة ولا النحر ولا المخلفات ولا أى حساب إنشائى.",
+      inputs: [["Q", "التصرف التصميمى", "م³/ث", { min: 0.0001 }], ["Vall", "السرعة المسموحة أسفل الكوبرى", "م/ث", { min: 0.05, max: 5 }],
+               ["spans", "عدد البحور", "", { min: 1, int: true }], ["y", "عمق الماء التصميمى", "م", { min: 0.05 }],
+               ["clr", "الارتفاع فوق سطح الماء", "م", { min: 0 }]],
       run: function (v) {
         var A = v.Q / v.Vall;
         var W = A / v.y;
@@ -2699,6 +2705,7 @@ function tabHeadline(entry) {
 /* ---------------- صفحة الكيان الواحد (كل ما يخص مجرى فى شاشة) ---------------- */
 var ENTITY_SEL = {};
 var PENDING_FILTER = null;
+var LOAD_TOKEN = 0;   /* يبطل نتيجة تحميل تبويب غادرناه */
 function entityValues(w) {
   var src = ALL[w.entityTab];
   if (!src) return [];
@@ -3076,10 +3083,19 @@ function designPanel(w, t) {
   p.appendChild(res);
 
   function compute() {
-    var v = {}, missing = [];
+    var v = {}, missing = [], bad = [];
     def.inputs.forEach(function (pr) {
       var x = parseFloat(inputs[pr[0]].value);
-      if (isNaN(x)) missing.push(pr[1]);
+      var lim = pr[3] || {};
+      inputs[pr[0]].classList.remove("bad");
+      if (isNaN(x)) { missing.push(pr[1]); }
+      else {
+        /* قيود هندسية: لا صفر ولا سالب حيث لا معنى لهما، وأعداد صحيحة للفتحات والبحور */
+        if (lim.min !== undefined && x < lim.min) bad.push(pr[1] + ": لا يقلّ عن " + lim.min);
+        else if (lim.max !== undefined && x > lim.max) bad.push(pr[1] + ": لا يزيد عن " + lim.max);
+        else if (lim.int && Math.round(x) !== x) bad.push(pr[1] + ": لازم عدد صحيح");
+        if (bad.length && bad[bad.length - 1].indexOf(pr[1]) === 0) inputs[pr[0]].classList.add("bad");
+      }
       v[pr[0]] = x; mem[pr[0]] = inputs[pr[0]].value;
     });
     res.innerHTML = "";
@@ -3087,14 +3103,21 @@ function designPanel(w, t) {
       res.appendChild(el("div", { "class": "errbox" }, ["• مدخلات ناقصة: " + missing.join(" · ")]));
       return null;
     }
+    if (bad.length) {
+      var eb = el("div", { "class": "errbox" });
+      bad.forEach(function (m2) { eb.appendChild(el("div", {}, ["• " + m2])); });
+      res.appendChild(eb);
+      return null;
+    }
     var out;
     try { out = def.run(v); }
     catch (e) { res.appendChild(el("div", { "class": "errbox" }, ["• تعذّر الحساب: " + e.message])); return null; }
 
-    var bad = [];
+    var bad2 = [];
     out.out.forEach(function (o) {
-      if (typeof o[1] === "number" && !isFinite(o[1])) bad.push(o[0]);
+      if (typeof o[1] === "number" && !isFinite(o[1])) bad2.push(o[0]);
     });
+    out.__bad = bad2;
     var tb = el("table"), hr = el("tr");
     ["البيان", "القيمة", "الوحدة"].forEach(function (h) { hr.appendChild(el("th", {}, [h])); });
     tb.appendChild(el("thead", {}, [hr]));
@@ -3110,8 +3133,8 @@ function designPanel(w, t) {
     tb.appendChild(bd);
     res.appendChild(el("div", { "class": "tbl-wrap" }, [tb]));
 
-    if (bad.length) {
-      res.appendChild(el("div", { "class": "errbox" }, ["• قيم غير محسوبة (تحقّق من المدخلات): " + bad.join(" · ")]));
+    if (bad2.length) {
+      res.appendChild(el("div", { "class": "errbox" }, ["• قيم غير محسوبة (تحقّق من المدخلات): " + bad2.join(" · ")]));
     }
     var fl = el("div", { "class": "actions" });
     (out.flags || []).forEach(function (f) {
@@ -3228,6 +3251,7 @@ function designPanel(w, t) {
   save.onclick = function () {
     var r = compute();
     if (!r) { toast("صحّح المدخلات أولاً", true); return; }
+    if (r.out.__bad && r.out.__bad.length) { toast("لا تُحفظ نتيجة فيها قيم غير محسوبة", true); return; }
     var rec = { dcalc: w.dcalc, dname: def.name, by: who() };
     def.inputs.forEach(function (pr) { rec["in_" + pr[0]] = r.v[pr[0]]; });
     r.out.out.forEach(function (o, i) {
@@ -3244,6 +3268,7 @@ function designPanel(w, t) {
   xfer.onclick = function () {
     var r = compute();
     if (!r) { toast("صحّح المدخلات أولاً", true); return; }
+    if (r.out.__bad && r.out.__bad.length) { toast("لا يُحوَّل بند من نتيجة فيها قيم غير محسوبة", true); return; }
     buildXfer(r);
   };
   p.appendChild(el("div", { "class": "actions" }, [calc, save, xfer]));
@@ -3266,13 +3291,27 @@ function hydroPanel(w, rows, t) {
     var wb;
     try { wb = E.hydroBalance(rows, w.inField, w.outField, { tolerancePct: w.tol || 5 }); }
     catch (e) { p.appendChild(el("div", { "class": "empty" }, ["تعذّر الحساب: " + e.message])); return p; }
+    /* النسبة بلا معنى إذا كان الوارد صفراً — لا تُعرض «مقبول» على منصرف بلا وارد */
+    var tol = w.tol || 5;
+    var noBase = !(wb.inflow > 0);
+    var okState = !noBase && Math.abs(wb.closurePct) <= tol;
     var g = el("div", { "class": "grid g4" });
     g.appendChild(kpiCard("↓", "", "الوارد", fmt(wb.inflow), "م³/ث"));
     g.appendChild(kpiCard("↑", "sand", "المنصرف", fmt(wb.outflow), "م³/ث"));
-    g.appendChild(kpiCard("Δ", wb.status === "متزن" ? "green" : "", "الفرق", fmt(wb.closure), "م³/ث"));
-    g.appendChild(kpiCard("%", wb.status === "متزن" ? "green" : "sand", "نسبة الإقفال", fmt(wb.closurePct), "%", wb.status));
+    g.appendChild(kpiCard("Δ", okState ? "green" : "", "الفرق", fmt(wb.closure), "م³/ث"));
+    g.appendChild(kpiCard("%", okState ? "green" : "sand", "نسبة الإقفال",
+      noBase ? "—" : fmt(wb.closurePct), noBase ? "" : "%",
+      noBase ? "غير محسوبة" : (okState ? "داخل السماح" : "خارج السماح")));
     p.appendChild(g);
-    p.appendChild(el("div", { "class": "hint" }, ["مصدر الحساب: MWRIHyd.waterBalance — سماح " + (w.tol || 5) + "%. لا يشمل البخر والرشح ما لم تُدخَل كحقول."]));
+    if (noBase && wb.outflow > 0) {
+      p.appendChild(el("div", { "class": "errbox" }, [
+        "• منصرف بلا وارد مسجَّل: النسبة غير قابلة للحساب، والحالة تحتاج مراجعة ميدانية — لا تُقرأ كإقفال مقبول."
+      ]));
+    }
+    p.appendChild(el("div", { "class": "hint" }, [
+      "مصدر الحساب: MWRIHyd.waterBalance — سماح " + tol + "%. الحالة تُحسب هنا من نسبة الإقفال مقابل السماح. "
+      + "لا يشمل البخر والرشح ما لم تُدخَلا كحقول."
+    ]));
     return p;
   }
 
@@ -3535,15 +3574,19 @@ function isCross(w) {
 function renderTab(t) {
   var c = document.getElementById("content"); c.innerHTML = "";
   c.appendChild(el("div", { "class": "empty" }, ["جارٍ تحميل البيانات…"]));
+  LOAD_TOKEN++;
+  var myToken = LOAD_TOKEN;
   var cross = false;
   toArr(t.widgets).forEach(function (w) { if (isCross(w)) cross = true; });
   if (cross) {
     /* لوحة قيادة: تُحمَّل سجلات كل التبويبات مرة واحدة قبل الرسم */
     E.loadAllRecords(S.schema).then(function (m) {
+      if (myToken !== LOAD_TOKEN) return;      /* غادر المستخدم هذا التبويب */
       ALL = m;
       var own = m[t.id];
       drawTab(t, own ? own.rows : [], own ? own.offline : false);
     }).catch(function (e) {
+      if (myToken !== LOAD_TOKEN) return;
       c.innerHTML = "";
       var p = panel("تعذّر التحميل", "لوحة القيادة لم تُحمَّل");
       p.appendChild(el("div", { "class": "hint" }, ["نص الخطأ: " + e.message]));
@@ -3552,9 +3595,11 @@ function renderTab(t) {
     return;
   }
   E.loadRecords(t).then(function (res) {
+    if (myToken !== LOAD_TOKEN) return;
     RECS[t.id] = res.rows;
     drawTab(t, res.rows, res.offline);
   }).catch(function (e) {
+    if (myToken !== LOAD_TOKEN) return;
     c.innerHTML = "";
     var p = panel("تعذّر التحميل", "مصدر البيانات لم يستجب");
     p.appendChild(el("div", { "class": "hint" }, ["نص الخطأ: " + e.message]));
@@ -3730,7 +3775,8 @@ function drawTab(t, rows, offline) {
           rowsView.forEach(function (r) {
             out += fields.map(function (f) { return "\u0022" + String(r[f.id] === undefined ? "" : r[f.id]).replace(/"/g, "\u0022\u0022") + "\u0022"; }).join(",") + "\n";
           });
-          E.downloadText(t.title + ".csv", out, "text/csv;charset=utf-8");
+          /* BOM ليفتح إكسل العربية بالترميز الصحيح */
+          E.downloadText(t.title + ".csv", "\uFEFF" + out, "text/csv;charset=utf-8");
         };
         p3.appendChild(el("div", { "class": "actions" }, [exp]));
       }
@@ -4055,9 +4101,14 @@ var ADMIN_LOADED = false;
 var REF_ROWS = {};    /* سجلات التبويبات المرجعية للنموذج الحالى */
 /* المسؤول = لا حماية مفعّلة، أو مفعّلة وجلسته مفتوحة.
    يُستدعى قبل كل إجراء مقيَّد (الرجوع لنسخة · حذف السجلات). */
-function isAdmin() { return !E.gate.isSet(ADMIN_CFG) || E.gate.isUnlocked(); }
+/* حتى تكتمل قراءة إعدادات الصلاحيات لا يُعتبر أحد مسؤولاً — الفشل مغلقاً لا مفتوحاً */
+var ADMIN_READY = false;
+function isAdmin() {
+  if (!ADMIN_READY) return false;
+  return !E.gate.isSet(ADMIN_CFG) || E.gate.isUnlocked();
+}
 function ensureAdminCfg(cb) {
-  if (ADMIN_CFG !== null || ADMIN_LOADED) { cb(); return; }
+  if (ADMIN_READY || ADMIN_LOADED) { cb(); return; }
   ADMIN_LOADED = true;
   E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; cb(); })
     .catch(function () { ADMIN_CFG = null; cb(); });
@@ -4287,8 +4338,8 @@ function renderAdmin() {
   if (ADMIN_CFG === null && !ADMIN_LOADED) {
     c.appendChild(el("div", { "class": "empty" }, ["جارٍ قراءة إعدادات الصلاحيات…"]));
     ADMIN_LOADED = true;
-    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; renderAdmin(); })
-      .catch(function () { ADMIN_CFG = null; renderAdmin(); });
+    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; renderAdmin(); })
+      .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; renderAdmin(); });
     return;
   }
   /* البوابة مفعّلة والجلسة مقفولة: لا تُعرض أدوات البنية إطلاقاً */
@@ -5007,8 +5058,8 @@ function boot(seed) {
     buildNav();
     /* تُقرأ إعدادات الصلاحيات مبكراً حتى تسرى القيود على كل الشاشات لا على الإدارة وحدها */
     ADMIN_LOADED = true;
-    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; })
-      .catch(function () { ADMIN_CFG = null; });
+    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; ADMIN_READY = true; select(CUR); })
+      .catch(function () { ADMIN_CFG = null; ADMIN_READY = true; });
     /* لقطة اليوم إن لم تُؤخذ — صامتة تماماً، لا تُعطّل الإقلاع ولا تُظهر خطأ */
     E.ensureSnapshot(S.schema, who()).catch(function () { });
     var f = toArr(S.schema.tabs)[0];
@@ -5064,6 +5115,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 5.60 -->
+<!-- build 5.70 -->
 </body>
 </html>
