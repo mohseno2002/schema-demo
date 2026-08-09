@@ -143,6 +143,16 @@ h1,h2,h3{letter-spacing:-.3px}
   .rep-tbl{page-break-inside:auto}
   .rep-tbl tr{page-break-inside:avoid}
 }
+.wiz-bar{display:flex;align-items:center;gap:10px;font-size:10px;color:var(--muted);font-weight:700;
+  border-bottom:1px dashed var(--line);padding-bottom:9px;margin-bottom:12px}
+.wiz-bar .sp{margin-inline-start:auto}
+.wiz-bar .m{font-family:var(--mono)}
+.wiz-q{font-size:15px!important;margin:4px 0 14px!important}
+.wiz-opts{display:grid;gap:9px}
+.wiz-opt{text-align:right;border:1px solid var(--line);background:#fff;border-radius:12px;padding:13px 15px;
+  font-size:12.5px;font-weight:600;color:#40504b;transition:.15s;min-height:48px}
+.wiz-opt:hover{border-color:var(--lake);background:#f2f7f6;transform:translateX(-2px)}
+.wiz-opt.on{border-color:var(--lake);background:#e6f0ed;color:var(--lake-deep)}
 .ov-card{background:var(--white);border:1px solid var(--line);border-radius:14px;padding:16px;
   box-shadow:var(--shadow);cursor:pointer;transition:.18s}
 .ov-card:hover{border-color:var(--lake);transform:translateY(-2px)}
@@ -1360,6 +1370,131 @@ var SchemaEngine = (function () {
     }
   ];
 
+
+  /* ---------------- معالج بناء التبويب (بلا ذكاء اصطناعى ولا مفاتيح) ---------------- */
+  /* يحوّل إجابات خمسة أسئلة إلى تبويب كامل من نفس مكعّبات القوالب */
+  var WIZ_Q = [
+    { id: "kind", q: "التبويب ده هيتابع إيه؟", type: "choice",
+      opts: [["works", "أعمال تنفيذ على المجارى"], ["assets", "منشآت وأصول"],
+             ["measure", "قياسات ميدانية"], ["register", "سجل مرجعى (ترع/جهات)"]] },
+    { id: "title", q: "اسم التبويب؟", type: "text", ph: "مثال: تبطين ترع مركز البدرشين" },
+    { id: "geo", q: "فيه مواقع تتحطّ على الخريطة؟", type: "choice",
+      opts: [["1", "نعم — أضف إحداثيات وخريطة"], ["0", "لا"]] },
+    { id: "prog", q: "فيه متابعة تنفيذ (نسبة ومقاول وتواريخ)؟", type: "choice",
+      opts: [["1", "نعم"], ["0", "لا"]],
+      when: function (a) { return a.kind === "works" || a.kind === "assets"; } },
+    { id: "qty", q: "فيه كميات أو أطوال منفّذة؟", type: "choice",
+      opts: [["len", "أطوال بالمتر"], ["vol", "كميات بالمتر المكعب"], ["both", "الاتنين"], ["0", "لا"]],
+      when: function (a) { return a.kind === "works"; } },
+    { id: "hyd", q: "فيه حساب هيدروليكى؟", type: "choice",
+      opts: [["0", "لا"], ["manning", "مانينج — تصرف وسرعة"], ["gate", "تصرف بوابة"], ["balance", "اتزان مائى"]],
+      when: function (a) { return a.kind === "measure" || a.kind === "works"; } }
+  ];
+  function wizSteps(ans) {
+    return WIZ_Q.filter(function (q) { return !q.when || q.when(ans); });
+  }
+  function wizardTab(a) {
+    var F = [], W = [], title = (a.title || "تبويب جديد").trim();
+    var isReg = a.kind === "register";
+
+    if (isReg) {
+      F.push({ id: "code", label: "كود المجرى", type: "text", required: true });
+      F.push({ id: "name", label: "اسم المجرى", type: "text", required: true });
+      F.push({ id: "admin", label: "الإدارة", type: "text" });
+      F.push({ id: "eng", label: "الهندسة", type: "text" });
+      F.push({ id: "ctype", label: "نوع المجرى", type: "select", options: "ترعة,رياح,مصرف,مسقى,مجرى مغطى" });
+      F.push({ id: "lenKm", label: "الطول", type: "number", unit: "ك.م", min: 0, max: 2000 });
+      F.push({ id: "area", label: "الزمام", type: "number", unit: "فدان", min: 0 });
+      F.push({ id: "qDesign", label: "التصرف المقنن", type: "number", unit: "م³/ث", min: 0, max: 500 });
+      W.push({ id: uid("w"), type: "kpi", label: "عدد المجارى المسجّلة", agg: "count", field: "", unit: "مجرى", icon: "#", style: "green" });
+      W.push({ id: uid("w"), type: "kpi", label: "إجمالى الأطوال", agg: "sum", field: "lenKm", unit: "ك.م", icon: "\u03A3" });
+      W.push({ id: uid("w"), type: "kpi", label: "إجمالى الزمام", agg: "sum", field: "area", unit: "فدان", icon: "\u25A6", style: "sand" });
+      W.push({ id: uid("w"), type: "chart", label: "الأطوال حسب الهندسة", labelField: "eng", valueField: "lenKm", agg: "sum", chartType: "bar" });
+    } else {
+      F.push(fCanal());
+      if (a.kind === "assets") {
+        F.push({ id: "name", label: "اسم المنشأ", type: "text", required: true });
+        F.push({ id: "stype", label: "نوع المنشأ", type: "select", required: true,
+          options: "كوبرى,بدال,هدار,سيفون,عبارة صندوقية,عبارة ماسورة,بوابة,محطة رفع" });
+        F.push({ id: "km", label: "الكيلومتر", type: "number", unit: "ك.م", min: 0, max: 2000 });
+      } else if (a.kind === "measure") {
+        F.push({ id: "point", label: "نقطة القياس", type: "text", required: true });
+        F.push({ id: "km", label: "الكيلومتر", type: "number", unit: "ك.م", min: 0, max: 2000 });
+        F.push({ id: "day", label: "تاريخ القياس", type: "date", required: true });
+      } else {
+        F.push({ id: "wtype", label: "نوع العمل", type: "select", required: true,
+          options: "تبطين خرسانى,تكسية دبش,تغطية خرسانية,مواسير,كوبرى,تطهير,إحلال وتجديد,حماية جسور" });
+        F.push(fKm("kmFrom", "من كيلو"));
+        F.push(fKm("kmTo", "إلى كيلو"));
+      }
+      if (a.qty === "len" || a.qty === "both") F.push(fLen("م"));
+      if (a.qty === "vol" || a.qty === "both") F.push({ id: "qty", label: "الكمية المنفّذة", type: "number", unit: "م³", min: 0 });
+      if (a.prog === "1") {
+        F.push(fPct("pct", "نسبة التنفيذ"));
+        F.push(fStatus());
+        F.push(fContractor());
+        fDates().forEach(function (d) { F.push(d); });
+      }
+    }
+
+    /* حقول الحساب الهيدروليكى — تُضاف فقط بما يحتاجه الحساب المختار */
+    var hy = a.hyd && a.hyd !== "0" ? a.hyd : "";
+    if (hy === "manning") {
+      F.push({ id: "b", label: "عرض القاع", type: "number", unit: "م", required: true, min: 0.1, max: 500 });
+      F.push({ id: "y", label: "عمق الماء", type: "number", unit: "م", required: true, min: 0.01, max: 20 });
+      F.push({ id: "n", label: "معامل الخشونة", type: "number", required: true, min: 0.012, max: 0.075 });
+    } else if (hy === "gate") {
+      F.push({ id: "b", label: "عرض البوابة", type: "number", unit: "م", required: true, min: 0.1, max: 100 });
+      F.push({ id: "a", label: "فتحة البوابة", type: "number", unit: "م", required: true, min: 0.01, max: 10 });
+      F.push({ id: "y1", label: "المنسوب أمام", type: "number", unit: "م", required: true, min: 0, max: 60 });
+      F.push({ id: "y3", label: "المنسوب خلف", type: "number", unit: "م", required: true, min: 0, max: 60 });
+    } else if (hy === "balance") {
+      F.push({ id: "qin", label: "الوارد", type: "number", unit: "م³/ث", required: true, min: 0, max: 500 });
+      F.push({ id: "qout", label: "المنصرف", type: "number", unit: "م³/ث", required: true, min: 0, max: 500 });
+    }
+
+    if (a.geo === "1") { fGeo().forEach(function (g) { F.push(g); }); }
+
+    /* المؤشرات والرسوم */
+    if (!isReg) {
+      W.push(wCount("عدد البنود"));
+      if (a.qty === "len" || a.qty === "both") W.push(wSumLen("م"));
+      if (a.qty === "vol" || a.qty === "both") {
+        W.push({ id: uid("w"), type: "kpi", label: "إجمالى الكميات", agg: "sum", field: "qty", unit: "م³", icon: "\u2211", style: "green" });
+      }
+      if (a.prog === "1") W.push(wProgress());
+      var catField = a.kind === "assets" ? "stype" : (a.kind === "measure" ? "point" : "wtype");
+      var valField = (a.qty === "len" || a.qty === "both") ? "len" : ((a.qty === "vol" || a.qty === "both") ? "qty" : "");
+      if (valField) {
+        W.push({ id: uid("w"), type: "chart", label: "التجميع حسب التصنيف", labelField: catField, valueField: valField, agg: "sum", chartType: "bar" });
+      }
+    }
+    if (hy === "manning") {
+      W.push({ id: uid("w"), type: "hydro", label: "مانينج — تصرف وسرعة ورقابة", calc: "manning",
+        labelField: isReg ? "name" : (a.kind === "measure" ? "point" : "canal"),
+        map: { b: { f: "b" }, y: { f: "y" }, z: { c: 2 }, n: { f: "n" }, S: { c: 0.0001 } } });
+    } else if (hy === "gate") {
+      W.push({ id: uid("w"), type: "hydro", label: "تصرف البوابات", calc: "gate",
+        labelField: a.kind === "measure" ? "point" : "canal",
+        map: { b: { f: "b" }, a: { f: "a" }, y1: { f: "y1" }, y3: { f: "y3" } } });
+    } else if (hy === "balance") {
+      W.push({ id: uid("w"), type: "hydro", label: "الاتزان المائى", calc: "balance", inField: "qin", outField: "qout", tol: 5 });
+    }
+    if (a.geo === "1") {
+      W.push({ id: uid("w"), type: "map", label: "المواقع على الخريطة", latField: "lat", lngField: "lng",
+        labelField: isReg ? "name" : (a.kind === "assets" ? "name" : (a.kind === "measure" ? "point" : "canal")), base: "esri" });
+    }
+    W.push(wTable("السجلات"));
+
+    var icons = { works: "\u2692", assets: "\u2354", measure: "\u25CE", register: "\u2261" };
+    var eyes = { works: "متابعة تنفيذ", assets: "منشآت", measure: "قياسات", register: "مرجع" };
+    return {
+      id: uid("tab"), icon: icons[a.kind] || "\u25A3", eyebrow: eyes[a.kind] || "قسم",
+      title: title, source: { type: "firebase" }, fields: F, widgets: W,
+      notes: hy === "manning" ? "ثابتان مبدئيان: ميل الجوانب z=2 وميل القاع S=0.0001 — عدّلهما من إعداد العنصر" : ""
+    };
+  }
+
   /* ---------------- كتالوج العناصر ---------------- */
   var WIDGETS = {
     kpi: { name: "رقم مجمّع", needs: ["agg", "field"] },
@@ -1424,7 +1559,7 @@ var SchemaEngine = (function () {
     buildKML: buildKML, downloadText: downloadText, earthUrl: earthUrl,
     WIDGETS: WIDGETS, publish: publish,
     HYDRO: HYDRO, hydroValue: hydroValue, hydroBalance: hydroBalance,
-    TEMPLATES: TEMPLATES
+    TEMPLATES: TEMPLATES, WIZ_Q: WIZ_Q, wizSteps: wizSteps, wizardTab: wizardTab
   };
 })();
 
@@ -2338,6 +2473,113 @@ function importSchema(file, done) {
   fr.readAsText(file);
 }
 
+/* ---------------- واجهة معالج بناء التبويب ---------------- */
+var WIZ = null;   /* {step, ans, preview} */
+function wizardPanel() {
+  var p = panel("معالج", "بناء تبويب بالأسئلة");
+  if (!WIZ) {
+    p.appendChild(el("div", { "class": "hint" }, [
+      "خمسة أسئلة بأزرار، ويولّد لك التبويب كاملاً بحقوله وحدود تحققها ومؤشراته ورسومه — تعاينه قبل التركيب. يعمل بلا إنترنت خارجى وبلا مفاتيح."
+    ]));
+    var go = el("button", { "class": "btn solid" }, ["ابدأ المعالج"]);
+    go.onclick = function () { WIZ = { step: 0, ans: {}, preview: null }; renderAdmin(); };
+    p.appendChild(el("div", { "class": "actions" }, [go]));
+    return p;
+  }
+
+  var steps = E.wizSteps(WIZ.ans);
+  /* المعاينة */
+  if (WIZ.preview) {
+    var t = WIZ.preview;
+    p.appendChild(el("div", { "class": "wiz-bar" }, [el("span", {}, ["المعاينة قبل التركيب"])]));
+    p.appendChild(el("div", { "class": "adm-row" }, [
+      el("span", { "class": "nav-icon" }, [t.icon]),
+      el("span", { "class": "t" }, [t.title]),
+      el("span", { "class": "m" }, [toArr(t.fields).length + " حقل · " + toArr(t.widgets).length + " عنصر"])
+    ]));
+    var fl = el("div", { "class": "sub-panel" }, [el("h3", {}, ["الحقول"])]);
+    toArr(t.fields).forEach(function (f) {
+      var bits = [];
+      if (f.required) bits.push("إلزامى");
+      if (f.min !== undefined && f.min !== "") bits.push("أدنى " + f.min);
+      if (f.max !== undefined && f.max !== "") bits.push("أقصى " + f.max);
+      fl.appendChild(el("div", { "class": "adm-row" }, [
+        el("span", { "class": "pill lake" }, [f.type]),
+        el("span", { "class": "t" }, [f.label]),
+        el("span", { "class": "m" }, [f.id + (f.unit ? " · " + f.unit : "") + (bits.length ? " · " + bits.join(" · ") : "")])
+      ]));
+    });
+    p.appendChild(fl);
+    var wl = el("div", { "class": "sub-panel" }, [el("h3", {}, ["العناصر"])]);
+    toArr(t.widgets).forEach(function (w) {
+      wl.appendChild(el("div", { "class": "adm-row" }, [
+        el("span", { "class": "pill sand" }, [(E.WIDGETS[w.type] || { name: w.type }).name]),
+        el("span", { "class": "t" }, [w.label || "—"])
+      ]));
+    });
+    p.appendChild(wl);
+    if (t.notes) p.appendChild(el("div", { "class": "hint" }, ["ملاحظة: " + t.notes]));
+    var ok = el("button", { "class": "btn solid" }, ["تركيب التبويب وانشر"]);
+    ok.onclick = function () {
+      var tab = WIZ.preview;
+      delete tab.notes;
+      S.schema.tabs = toArr(S.schema.tabs).concat([tab]);
+      ADM_TAB = tab.id; WIZ = null;
+      pub("تبويب من المعالج: " + tab.title);
+    };
+    var back = el("button", { "class": "btn" }, ["رجوع للأسئلة"]);
+    back.onclick = function () { WIZ.preview = null; WIZ.step = 0; renderAdmin(); };
+    var cancel = el("button", { "class": "btn warn" }, ["إلغاء"]);
+    cancel.onclick = function () { WIZ = null; renderAdmin(); };
+    p.appendChild(el("div", { "class": "actions" }, [ok, back, cancel]));
+    return p;
+  }
+
+  /* السؤال الحالى */
+  var q = steps[WIZ.step];
+  if (!q) {
+    WIZ.preview = E.wizardTab(WIZ.ans);
+    return wizardPanel();
+  }
+  /* عدد الأسئلة يتحدّد بعد إجابة السؤال الأول (نوع التبويب) — فلا يُعرض قبلها */
+  p.appendChild(el("div", { "class": "wiz-bar" }, [
+    el("span", {}, [WIZ.ans.kind ? ("سؤال " + (WIZ.step + 1) + " من " + steps.length) : "السؤال الأول"]),
+    el("span", { "class": "sp" }),
+    el("span", { "class": "m" }, [Object.keys(WIZ.ans).length + " إجابة"])
+  ]));
+  p.appendChild(el("h2", { "class": "wiz-q" }, [q.q]));
+
+  if (q.type === "text") {
+    var inp = el("input", { type: "text", placeholder: q.ph || "", value: WIZ.ans[q.id] || "" });
+    var nx = el("button", { "class": "btn solid" }, ["التالى"]);
+    nx.onclick = function () {
+      if (!inp.value.trim()) { toast("اكتب إجابة أولاً", true); return; }
+      WIZ.ans[q.id] = inp.value.trim(); WIZ.step++; renderAdmin();
+    };
+    p.appendChild(el("div", { "class": "frm" }, [el("div", { "class": "fld" }, [inp])]));
+    p.appendChild(el("div", { "class": "actions" }, [nx]));
+  } else {
+    var wrap = el("div", { "class": "wiz-opts" });
+    q.opts.forEach(function (o) {
+      var b = el("button", { "class": "wiz-opt" + (WIZ.ans[q.id] === o[0] ? " on" : "") }, [o[1]]);
+      b.onclick = function () { WIZ.ans[q.id] = o[0]; WIZ.step++; renderAdmin(); };
+      wrap.appendChild(b);
+    });
+    p.appendChild(wrap);
+  }
+  var acts = [];
+  if (WIZ.step > 0) {
+    var bk = el("button", { "class": "btn" }, ["السابق"]);
+    bk.onclick = function () { WIZ.step--; renderAdmin(); };
+    acts.push(bk);
+  }
+  var cn = el("button", { "class": "btn warn" }, ["إلغاء المعالج"]);
+  cn.onclick = function () { WIZ = null; renderAdmin(); };
+  acts.push(cn);
+  p.appendChild(el("div", { "class": "actions" }, acts));
+  return p;
+}
+
 function renderAdmin() {
   var c = document.getElementById("content"); c.innerHTML = "";
 
@@ -2368,6 +2610,8 @@ function renderAdmin() {
   ]));
   tools.appendChild(el("div", { "class": "actions" }, [dashBtn, expBtn, impBtn, impInput]));
   c.appendChild(tools);
+
+  c.appendChild(wizardPanel());
 
   /* قوالب جاهزة — تُركَّب على المخطط القائم */
   var tplPanel = panel("قوالب جاهزة", "تبويبات أعمال المجارى المائية");
@@ -2926,6 +3170,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 4.30 -->
+<!-- build 4.60 -->
 </body>
 </html>
