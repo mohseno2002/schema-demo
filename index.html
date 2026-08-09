@@ -143,6 +143,7 @@ h1,h2,h3{letter-spacing:-.3px}
   .rep-tbl{page-break-inside:auto}
   .rep-tbl tr{page-break-inside:avoid}
 }
+.btn.off{opacity:.45;border-style:dashed}
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 6px}
 .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 13px;font-size:10.5px;
   font-weight:700;color:#4c5854;transition:.15s}
@@ -2996,8 +2997,9 @@ function drawTab(t, rows, offline) {
           if (editable) {
             var ed = el("button", { "class": "btn mini" }, ["تعديل"]);
             ed.onclick = function () { startEdit(t, r); };
-            var del = el("button", { "class": "btn mini warn" }, ["حذف"]);
+            var del = el("button", { "class": "btn mini warn" + (isAdmin() ? "" : " off") }, ["حذف"]);
             del.onclick = function () {
+              if (!isAdmin()) { denyMsg(); return; }
               if (!window.confirm("حذف هذا السجل نهائياً؟")) return;
               E.db.del(E.cfg.root + "/data/records/" + t.id + "/" + r.__key).then(function () {
                 audit("حذف سجل من: " + t.title); renderTab(t); toast("اتحذف السجل");
@@ -3295,6 +3297,18 @@ var WIZ = null;   /* {step, ans, preview} */
 var TPL_GROUP = "";   /* مرشّح مجال القوالب */
 var ADMIN_CFG = null; /* إعدادات بوابة الإدارة من القاعدة */
 var ADMIN_LOADED = false;
+/* المسؤول = لا حماية مفعّلة، أو مفعّلة وجلسته مفتوحة.
+   يُستدعى قبل كل إجراء مقيَّد (الرجوع لنسخة · حذف السجلات). */
+function isAdmin() { return !E.gate.isSet(ADMIN_CFG) || E.gate.isUnlocked(); }
+function ensureAdminCfg(cb) {
+  if (ADMIN_CFG !== null || ADMIN_LOADED) { cb(); return; }
+  ADMIN_LOADED = true;
+  E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; cb(); })
+    .catch(function () { ADMIN_CFG = null; cb(); });
+}
+function denyMsg() {
+  toast("الإجراء ده مقصور على المسؤول — افتح شاشة الإدارة بكلمة السر", true);
+}
 function wizardPanel() {
   var p = panel("معالج", "بناء تبويب بالأسئلة");
   if (!WIZ) {
@@ -3994,13 +4008,20 @@ function renderHistory() {
   var c = document.getElementById("content"); c.innerHTML = "";
   var p = panel("التأريخ", "نسخ المخطط السابقة");
   p.appendChild(el("div", { "class": "hint" }, ["الرجوع بينشر النسخة القديمة كإصدار جديد — فمفيش فقدان للتأريخ."]));
+  if (!isAdmin()) {
+    p.appendChild(el("div", { "class": "banner" }, [
+      el("span", { "class": "pill lake" }, ["اطّلاع"]),
+      el("span", {}, ["الرجوع لنسخة سابقة مقصور على المسؤول — الجدول هنا للاطّلاع."])
+    ]));
+  }
   c.appendChild(p);
   E.db.get(E.cfg.root + "/data/history").then(function (h) {
     var list = toArr(h).sort(function (a, b) { return (b.version || 0) - (a.version || 0); }).slice(0, 12);
     if (!list.length) { p.appendChild(el("div", { "class": "empty" }, ["لا توجد نسخ سابقة بعد."])); return; }
     list.forEach(function (v) {
-      var b = el("button", { "class": "btn mini" }, ["رجوع لهذه النسخة"]);
+      var b = el("button", { "class": "btn mini" + (isAdmin() ? "" : " off") }, ["رجوع لهذه النسخة"]);
       b.onclick = function () {
+        if (!isAdmin()) { denyMsg(); return; }
         if (!v.schema) { toast("النسخة فارغة", true); return; }
         E.db.get(E.cfg.root + "/data/schema").then(function (live) {
           S.schema = JSON.parse(JSON.stringify(v.schema));
@@ -4098,6 +4119,10 @@ function boot(seed) {
     }).catch(function () { });
     document.getElementById("st-ver").textContent = "إصدار المخطط " + (S.schema.version || 1);
     buildNav();
+    /* تُقرأ إعدادات الصلاحيات مبكراً حتى تسرى القيود على كل الشاشات لا على الإدارة وحدها */
+    ADMIN_LOADED = true;
+    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; })
+      .catch(function () { ADMIN_CFG = null; });
     var f = toArr(S.schema.tabs)[0];
     select(f ? f.id : "__admin");
   }).catch(function (e) {
@@ -4151,6 +4176,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 5.00 -->
+<!-- build 5.10 -->
 </body>
 </html>
