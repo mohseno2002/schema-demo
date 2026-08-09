@@ -2113,6 +2113,99 @@ var SchemaEngine = (function () {
     }
   };
 
+
+  /* ---------------- بوابة الإدارة (كلمة سر تُضبط من داخل التطبيق) ----------------
+     تُخزَّن كملح + بصمة PBKDF2-SHA256 بـ200000 دورة — لا تُخزَّن كلمة السر أبداً.
+     المصارحة الواجبة: قواعد RTDB مفتوحة، فمن يعرف عنوان القاعدة يكتب فيها مباشرة
+     بلا مرور على الواجهة. هذه البوابة **ردع وتنظيم صلاحيات**، لا حماية تشفيرية. */
+  var GATE_ITER = 200000;
+
+  function toB64(buf) {
+    var b = new Uint8Array(buf), s2 = "";
+    for (var i = 0; i < b.length; i++) s2 += String.fromCharCode(b[i]);
+    return btoa(s2);
+  }
+  function fromB64(str) {
+    var bin = atob(str), out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function hasCrypto() {
+    return typeof crypto !== "undefined" && crypto.subtle && typeof TextEncoder !== "undefined";
+  }
+  function derive(pw, saltBytes, iter) {
+    var enc = new TextEncoder();
+    return crypto.subtle.importKey("raw", enc.encode(pw), { name: "PBKDF2" }, false, ["deriveBits"])
+      .then(function (key) {
+        return crypto.subtle.deriveBits(
+          { name: "PBKDF2", salt: saltBytes, iterations: iter || GATE_ITER, hash: "SHA-256" }, key, 256);
+      });
+  }
+  function sessionKey() { return CFG.appId + "_admin_session"; }
+  function triesKey() { return CFG.appId + "_admin_tries"; }
+
+  var gate = {
+    /* إعدادات البوابة مشتركة فى القاعدة: تُضبط من جهاز وتسرى على الجميع */
+    load: function () {
+      return db.get(CFG.root + "/data/settings/admin").catch(function () { return null; });
+    },
+    isSet: function (cfg) { return !!(cfg && cfg.hash && cfg.salt); },
+    setPassword: function (pw) {
+      if (!hasCrypto()) return Promise.reject(new Error("المتصفح لا يدعم التشفير — افتح التطبيق عبر HTTPS"));
+      if (!pw || pw.length < 6) return Promise.reject(new Error("كلمة السر لا تقل عن ٦ محارف"));
+      var salt = crypto.getRandomValues(new Uint8Array(16));
+      return derive(pw, salt, GATE_ITER).then(function (bits) {
+        return db.put(CFG.root + "/data/settings/admin", {
+          salt: toB64(salt), hash: toB64(bits), iter: GATE_ITER, setAt: Date.now()
+        });
+      });
+    },
+    clear: function () { return db.del(CFG.root + "/data/settings/admin"); },
+    verify: function (pw, cfg) {
+      if (!hasCrypto()) return Promise.reject(new Error("المتصفح لا يدعم التشفير"));
+      if (!gate.isSet(cfg)) return Promise.resolve(false);
+      return derive(pw, fromB64(cfg.salt), cfg.iter || GATE_ITER).then(function (bits) {
+        var a = new Uint8Array(bits), b = fromB64(cfg.hash);
+        if (a.length !== b.length) return false;
+        var diff = 0;                       /* مقارنة ثابتة الزمن */
+        for (var i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+        return diff === 0;
+      });
+    },
+    /* قفل مؤقت بعد ٥ محاولات خاطئة */
+    lockedFor: function () {
+      var t = 0;
+      try { t = parseInt(localStorage.getItem(triesKey() + "_until") || "0", 10); } catch (e) { t = 0; }
+      var left = t - Date.now();
+      return left > 0 ? Math.ceil(left / 1000) : 0;
+    },
+    noteFail: function () {
+      var n = 0;
+      try { n = parseInt(localStorage.getItem(triesKey()) || "0", 10) + 1; localStorage.setItem(triesKey(), String(n)); } catch (e) { }
+      if (n >= 5) {
+        try { localStorage.setItem(triesKey() + "_until", String(Date.now() + 60000)); localStorage.setItem(triesKey(), "0"); } catch (e) { }
+        return 60;
+      }
+      return 0;
+    },
+    resetFails: function () { try { localStorage.setItem(triesKey(), "0"); localStorage.setItem(triesKey() + "_until", "0"); } catch (e) { } },
+    unlock: function (hours) {
+      try { localStorage.setItem(sessionKey(), String(Date.now() + (hours || 12) * 3600000)); } catch (e) { }
+    },
+    lock: function () { try { localStorage.setItem(sessionKey(), "0"); } catch (e) { } },
+    isUnlocked: function () {
+      var t = 0;
+      try { t = parseInt(localStorage.getItem(sessionKey()) || "0", 10); } catch (e) { t = 0; }
+      return t > Date.now();
+    },
+    sessionLeft: function () {
+      var t = 0;
+      try { t = parseInt(localStorage.getItem(sessionKey()) || "0", 10); } catch (e) { t = 0; }
+      var m = Math.floor((t - Date.now()) / 60000);
+      return m > 0 ? m : 0;
+    }
+  };
+
   /* ---------------- كتالوج العناصر ---------------- */
   var WIDGETS = {
     kpi: { name: "رقم مجمّع", needs: ["agg", "field"] },
@@ -2182,7 +2275,7 @@ var SchemaEngine = (function () {
     BASEMAPS: BASEMAPS, gibsLayer: gibsLayer, ensureLeaflet: ensureLeaflet,
     buildKML: buildKML, downloadText: downloadText, earthUrl: earthUrl,
     WIDGETS: WIDGETS, publish: publish,
-    HYDRO: HYDRO, DESIGN: DESIGN, hydroValue: hydroValue, hydroBalance: hydroBalance,
+    HYDRO: HYDRO, DESIGN: DESIGN, gate: gate, hydroValue: hydroValue, hydroBalance: hydroBalance,
     TEMPLATES: TEMPLATES, WIZ_Q: WIZ_Q, wizSteps: wizSteps, wizardTab: wizardTab
   };
 })();
@@ -3200,6 +3293,8 @@ function importSchema(file, done) {
 /* ---------------- واجهة معالج بناء التبويب ---------------- */
 var WIZ = null;   /* {step, ans, preview} */
 var TPL_GROUP = "";   /* مرشّح مجال القوالب */
+var ADMIN_CFG = null; /* إعدادات بوابة الإدارة من القاعدة */
+var ADMIN_LOADED = false;
 function wizardPanel() {
   var p = panel("معالج", "بناء تبويب بالأسئلة");
   if (!WIZ) {
@@ -3305,8 +3400,133 @@ function wizardPanel() {
   return p;
 }
 
+/* ---------------- بوابة الإدارة: شاشة القفل والفتح ---------------- */
+function lockPanel() {
+  var p = panel("محمية", "شاشة الإدارة مقفولة");
+  p.appendChild(el("div", { "class": "hint" }, [
+    "إضافة التبويبات وحذفها وتعديل الحقول والعناصر تحتاج كلمة سر المسؤول. "
+    + "الاطّلاع وإدخال السجلات وتعديلها يظلّان متاحين للجميع."
+  ]));
+  var wait = E.gate.lockedFor();
+  if (wait) {
+    p.appendChild(el("div", { "class": "errbox" }, ["• محاولات خاطئة متتالية — أعد المحاولة بعد " + wait + " ثانية"]));
+    return p;
+  }
+  var inp = el("input", { type: "password", placeholder: "كلمة السر" });
+  var msg = el("div", { "class": "errbox", style: "display:none" });
+  var go = el("button", { "class": "btn solid" }, ["فتح"]);
+  function tryOpen() {
+    if (!inp.value) { toast("اكتب كلمة السر", true); return; }
+    go.textContent = "جارٍ التحقق…";
+    E.gate.verify(inp.value, ADMIN_CFG).then(function (ok) {
+      go.textContent = "فتح";
+      if (ok) {
+        E.gate.resetFails(); E.gate.unlock(12);
+        toast("اتفتحت شاشة الإدارة — الجلسة ١٢ ساعة");
+        renderAdmin();
+        return;
+      }
+      var w = E.gate.noteFail();
+      msg.innerHTML = "";
+      msg.appendChild(el("div", {}, [w ? ("• كلمة سر خاطئة — قُفل الإدخال " + w + " ثانية") : "• كلمة سر خاطئة"]));
+      msg.style.display = "block";
+      inp.value = "";
+      if (w) renderAdmin();
+    }).catch(function (e) {
+      go.textContent = "فتح";
+      msg.innerHTML = ""; msg.appendChild(el("div", {}, ["• " + e.message])); msg.style.display = "block";
+    });
+  }
+  go.onclick = tryOpen;
+  inp.onkeydown = function (e) { if (e.key === "Enter") tryOpen(); };
+  p.appendChild(el("div", { "class": "frm" }, [el("div", { "class": "fld" }, [el("label", {}, ["كلمة السر"]), inp])]));
+  p.appendChild(msg);
+  p.appendChild(el("div", { "class": "actions" }, [go]));
+  return p;
+}
+
+function gateAdminPanel() {
+  var isSet = E.gate.isSet(ADMIN_CFG);
+  var p = panel("الصلاحيات", isSet ? "حماية شاشة الإدارة مفعّلة" : "حماية شاشة الإدارة غير مفعّلة");
+  if (isSet) {
+    p.appendChild(el("div", { "class": "hint" }, [
+      "مفعّلة منذ " + when(ADMIN_CFG.setAt) + " · الجلسة الحالية تنتهى بعد " + E.gate.sessionLeft() + " دقيقة."
+    ]));
+  } else {
+    p.appendChild(el("div", { "class": "hint" }, [
+      "أى مستخدم يقدر حالياً يضيف تبويباً أو يحذفه. عيّن كلمة سر ليصير ذلك مقصوراً عليك."
+    ]));
+  }
+  var p1 = el("input", { type: "password", placeholder: isSet ? "كلمة السر الجديدة" : "كلمة السر" });
+  var p2 = el("input", { type: "password", placeholder: "تأكيد كلمة السر" });
+  var cur = el("input", { type: "password", placeholder: "كلمة السر الحالية" });
+  var flds = [];
+  if (isSet) flds.push(el("div", { "class": "fld" }, [el("label", {}, ["كلمة السر الحالية"]), cur]));
+  flds.push(el("div", { "class": "fld" }, [el("label", {}, [isSet ? "الجديدة" : "كلمة السر"]), p1]));
+  flds.push(el("div", { "class": "fld" }, [el("label", {}, ["التأكيد"]), p2]));
+  p.appendChild(el("div", { "class": "frm" }, flds));
+
+  function withCurrent(next) {
+    if (!isSet) return next();
+    E.gate.verify(cur.value, ADMIN_CFG).then(function (ok) {
+      if (!ok) { toast("كلمة السر الحالية غير صحيحة", true); return; }
+      next();
+    }).catch(function (e) { toast(e.message, true); });
+  }
+  var setBtn = el("button", { "class": "btn solid" }, [isSet ? "تغيير كلمة السر" : "تفعيل الحماية"]);
+  setBtn.onclick = function () {
+    if (p1.value !== p2.value) { toast("التأكيد لا يطابق", true); return; }
+    withCurrent(function () {
+      setBtn.textContent = "جارٍ الحفظ…";
+      E.gate.setPassword(p1.value).then(function () {
+        E.gate.unlock(12);
+        toast(isSet ? "اتغيّرت كلمة السر" : "اتفعّلت الحماية — الإضافة والحذف بقت مقصورة عليك");
+        audit(isSet ? "تغيير كلمة سر الإدارة" : "تفعيل حماية شاشة الإدارة");
+        return E.gate.load().then(function (c) { ADMIN_CFG = c; renderAdmin(); });
+      }).catch(function (e) { setBtn.textContent = isSet ? "تغيير كلمة السر" : "تفعيل الحماية"; toast(e.message, true); });
+    });
+  };
+  var acts = [setBtn];
+  if (isSet) {
+    var lockBtn = el("button", { "class": "btn" }, ["اقفل الآن"]);
+    lockBtn.onclick = function () { E.gate.lock(); toast("اتقفلت الشاشة"); renderAdmin(); };
+    var offBtn = el("button", { "class": "btn warn" }, ["إلغاء الحماية"]);
+    offBtn.onclick = function () {
+      withCurrent(function () {
+        if (!window.confirm("إلغاء الحماية يعيد فتح إضافة التبويبات وحذفها لأى مستخدم. متأكد؟")) return;
+        E.gate.clear().then(function () {
+          ADMIN_CFG = null; audit("إلغاء حماية شاشة الإدارة");
+          toast("اتلغت الحماية"); renderAdmin();
+        }).catch(function (e) { toast(e.message, true); });
+      });
+    };
+    acts.push(lockBtn, offBtn);
+  }
+  p.appendChild(el("div", { "class": "actions" }, acts));
+  p.appendChild(el("div", { "class": "hint" }, [
+    "تُخزَّن بصمة PBKDF2-SHA256 (٢٠٠٠٠٠ دورة) لا كلمة السر نفسها، وتُضبط مرة وتسرى على كل الأجهزة. "
+    + "وبصراحة: قواعد القاعدة مفتوحة، فمن يعرف عنوانها يكتب فيها مباشرة بلا مرور على هذه الشاشة — "
+    + "البوابة تنظّم الصلاحيات وتردع، ولا تُغنى عن إغلاق القواعد."
+  ]));
+  return p;
+}
+
 function renderAdmin() {
   var c = document.getElementById("content"); c.innerHTML = "";
+
+  if (ADMIN_CFG === null && !ADMIN_LOADED) {
+    c.appendChild(el("div", { "class": "empty" }, ["جارٍ قراءة إعدادات الصلاحيات…"]));
+    ADMIN_LOADED = true;
+    E.gate.load().then(function (cfg) { ADMIN_CFG = cfg; renderAdmin(); })
+      .catch(function () { ADMIN_CFG = null; renderAdmin(); });
+    return;
+  }
+  /* البوابة مفعّلة والجلسة مقفولة: لا تُعرض أدوات البنية إطلاقاً */
+  if (E.gate.isSet(ADMIN_CFG) && !E.gate.isUnlocked()) {
+    c.appendChild(lockPanel());
+    return;
+  }
+  c.appendChild(gateAdminPanel());
 
   var nameInp = el("input", { type: "text", value: who() === "مستخدم غير مسمّى" ? "" : who(), placeholder: "اكتب اسمك" });
   var nb = el("button", { "class": "btn" }, ["حفظ الاسم"]);
@@ -3931,6 +4151,6 @@ if ("serviceWorker" in navigator) {
   });
 } else { SW_STATE = "المتصفح لا يدعم عامل الخدمة"; }
 </script>
-<!-- build 4.90 -->
+<!-- build 5.00 -->
 </body>
 </html>
